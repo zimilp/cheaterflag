@@ -1,0 +1,61 @@
+{
+  "name": "cheaterflag",
+  "productName": "CheaterFlag",
+  "version": "0.1.0",
+  "description": "CheaterFlag by ehbaah! \u2014 flags known and suspected CS2 cheaters in your matches",
+  "author": "ehbaah!",
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "dist": "electron-builder --win nsis",
+    "release": "electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "@laihoe/demoparser2": "^0.42.3",
+    "electron-updater": "^6.3.9",
+    "unbzip2-stream": "^1.4.3"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.ehbaah.cheaterflag",
+    "productName": "CheaterFlag",
+    "files": [
+      "main.js",
+      "preload.js",
+      "scanWorker.js",
+      "config.json",
+      "lib/**",
+      "renderer/**",
+      "assets/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/@laihoe/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true,
+      "artifactName": "CheaterFlag-Setup.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zimilp",
+        "repo": "cheaterflag",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

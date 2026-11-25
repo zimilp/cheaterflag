@@ -1,0 +1,453 @@
+'use strict';
+const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, shell, utilityProcess, nativeImage, clipboard, dialog } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const { Store } = require('./lib/store');
+const { Api } = require('./lib/api');
+const steamWindow = require('./lib/steamWindow');
+const { LobbyScanner } = require('./lib/lobbyScanner');
+const { MatchWatcher } = require('./lib/matchWatcher');
+const steamConfig = require('./lib/steamConfig');
+const { GameState, installCfg } = require('./lib/gsi');
+const { SCANNER_VERSION } = require('./lib/demoScan');
+const STEAM64_BASE = 76561197960265728n;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+let defaults = { workerUrl: '' };
+try { defaults = { ...defaults, ...require('./config.json') }; } catch (_) {}
+
+if (!app.requestSingleInstanceLock()) app.quit();
+
+let win, tray, store, api, lobby, watcher, scanProc, gsi;
+const lobbyState = { players: [], checks: {}, names: [], nameHits: {}, netcon: false, consoleLog: null };
+const send = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send(ch, data); };
+
+// Notifications never pop up mid-match: they wait until you're back in the menu/lobby.
+// `prematch` ones (blacklisted player in your lobby) may also show during warmup.
+const held = [];
+function notify(title, body, onClick, { prematch = false } = {}) {
+  if (store && store.get('notifications') === false) return;
+  if (gsi && gsi.quietTime(prematch)) {
+    if (!held.some((h) => h.title === title && h.body === body)) held.push({ title, body, onClick });
+    return;
+  }
+  const n = new Notification({ title, body, icon: path.join(__dirname, 'assets', 'icon.png') });
+  if (onClick) n.on('click', onClick);
+  n.show();
+}
+function flushHeld() {
+  while (held.length && !(gsi && gsi.quietTime())) { const h = held.shift(); notify(h.title, h.body, h.onClick); }
+}
+
+// ---------- demo scanning in a utility process
+let scanSeq = 0; const pending = new Map();
+function runScan(demoPath) {
+  if (!scanProc) {
+    scanProc = utilityProcess.fork(path.join(__dirname, 'scanWorker.js'));
+    scanProc.on('message', (m) => { const p = pending.get(m.id); if (!p) return; pending.delete(m.id); m.ok ? p.resolve(m.scan) : p.reject(new Error(m.error)); });
+    scanProc.on('exit', () => { scanProc = null; for (const p of pending.values()) p.reject(new Error('Scanner stopped')); pending.clear(); });
+  }
+  return new Promise((resolve, reject) => { const id = ++scanSeq; pending.set(id, { resolve, reject }); scanProc.postMessage({ id, demoPath }); });
+}
+
+// ---------- window + tray
+function createWindow() {
+  if (win && !win.isDestroyed()) { win.show(); win.focus(); return; }
+  win = new BrowserWindow({
+    width: 1100, height: 760, backgroundColor: '#0f1115', title: 'CheaterFlag', autoHideMenuBar: true,
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+  });
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  win.on('close', (e) => { if (!app.isQuitting) { e.preventDefault(); win.hide(); } });
+}
+
+function createTray() {
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png')).resize({ width: 16, height: 16 }));
+  tray.setToolTip('CheaterFlag');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open CheaterFlag', click: createWindow },
+    { label: 'Scan lobby now', click: () => lobby && lobby.scanNow() },
+    { label: 'Check for new matches now', click: () => watcher && watcher.tick() },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
+  ]));
+  tray.on('click', createWindow);
+}
+
+// ---------- lobby scanner
+async function onLobbyPlayers(fresh) {
+  lobbyState.players = [...new Set([...lobbyState.players, ...fresh])];
+  send('lobby', lobbyState);
+  if (!store.get('token')) return;
+  try {
+    const { players } = await api.check(fresh);
+    const bad = [];
+    for (const p of players) { lobbyState.checks[p.steamid] = p; if (p.tier !== 'approved') bad.push(p); }
+    send('lobby', lobbyState);
+    const red = bad.filter((p) => p.tier === 'rejected');
+    if (red.length) notify('CheaterFlag: flagged player in your match', red.map((p) => `${p.name || p.steamid} — ${p.reasons[0]}`).join('\n'), createWindow, { prematch: true });
+  } catch (e) { send('log', 'Lobby check failed: ' + e.message); }
+}
+
+// Live check while a match is loading/being played. Confirms blacklisted players by SteamID when Steam
+// shows they're on the same game server as you; otherwise falls back to name + "playing CS2 right now".
+async function liveCheck() {
+  if (!store.get('token')) return;
+  try {
+    const r = await api.liveCheck(lobbyState.names || []);
+    lobbyState.live = r;
+    for (const b of r.likely) lobbyState.nameHits[(b.name || '').toLowerCase()] = { ...b, level: 'likely' };
+    for (const b of r.confirmed) lobbyState.nameHits[(b.name || '').toLowerCase()] = { ...b, level: 'confirmed' };
+    for (const b of r.nameOnly) if (!lobbyState.nameHits[(b.name || '').toLowerCase()]) lobbyState.nameHits[(b.name || '').toLowerCase()] = { ...b, level: 'name' };
+    send('lobby', lobbyState);
+    const told = lobbyState.told || (lobbyState.told = new Set());
+    const fresh = [...r.confirmed.map((b) => ({ ...b, level: 'confirmed' })), ...r.likely.map((b) => ({ ...b, level: 'likely' }))].filter((b) => !told.has(b.steamid));
+    for (const b of fresh) told.add(b.steamid);
+    if (fresh.length) notify('CheaterFlag: blacklisted player in your match',
+      fresh.map((b) => `${b.name} — ${b.category} (${b.level === 'confirmed' ? 'confirmed by SteamID' : 'very likely: same name and playing CS2 now'})`).join('\n'), createWindow, { prematch: true });
+  } catch (e) { send('log', 'Live check failed: ' + e.message); }
+}
+let liveTimer = null;
+function onGameState(next, prev) {
+  send('game', next);
+  if (next.inMatch && !prev.inMatch) {               // match loading: check now and every minute
+    lobbyState.told = new Set();
+    setTimeout(liveCheck, 8000);
+    clearInterval(liveTimer); liveTimer = setInterval(liveCheck, 60000);
+  }
+  if (!next.inMatch && prev.inMatch) { clearInterval(liveTimer); liveTimer = null; }
+  if (!next.inMatch) { flushHeld(); remindVotes(); }
+}
+
+async function onLobbyNames(fresh, all) {
+  lobbyState.names = all;
+  send('lobby', lobbyState);
+  liveCheck();
+}
+
+// Flags waiting for your vote: reminded every 5 minutes, but never while a match is being played.
+async function remindVotes() {
+  if (!store.get('token') || (gsi && gsi.quietTime())) return;
+  if (Date.now() - (store.get('lastVoteReminder') || 0) < 5 * 60 * 1000 - 5000) return;
+  try {
+    const { flags } = await api.flags('pending');
+    const waiting = flags.filter((f) => !f.my_vote);
+    if (!waiting.length) return;
+    store.set({ lastVoteReminder: Date.now() });
+    notify('CheaterFlag: your vote is needed', `${waiting.length} suspected cheater${waiting.length === 1 ? '' : 's'} waiting for your vote in Review.`, () => { createWindow(); send('goto', 'review'); });
+  } catch (_) {}
+}
+setInterval(remindVotes, 5 * 60 * 1000);
+
+// When someone you played with gets blacklisted, ask you to report them in that match (one real report each).
+async function remindReports() {
+  if (!store.get('token')) return;
+  try {
+    const { entries } = await api.blacklist();
+    const told = new Set(store.get('reportReminders') || []);
+    const hist = store.get('history') || [];
+    for (const b of entries) {
+      if (told.has(b.steamid)) continue;
+      const match = hist.find((h) => (h.results || []).some((r) => r.steamid === b.steamid));
+      if (!match) continue;
+      told.add(b.steamid);
+      notify('CheaterFlag: please report this player', `${b.name || b.steamid} (${b.category}) was in your match on ${(match.map || '').replace(/^de_/, '')}. Open the match in CS2 and report them once.`, createWindow);
+    }
+    store.set({ reportReminders: [...told] });
+  } catch (_) {}
+}
+setInterval(remindReports, 10 * 60 * 1000);
+
+function startServices() {
+  lobby && lobby.stop(); watcher && watcher.stop();
+  lobby = new LobbyScanner({ cs2Dir: store.get('cs2Dir'), netconPort: Number(store.get('netconPort') || 2121), ownSteamId: store.get('steamid'), ownName: store.get('name') });
+  lobby.on('status', (s) => { lobbyState.consoleLog = s.consoleLog; send('lobby', lobbyState); });
+  lobby.on('netcon', (on) => { lobbyState.netcon = on; send('lobby', lobbyState); });
+  lobby.on('matchStart', () => { lobbyState.players = []; lobbyState.checks = {}; lobbyState.names = []; lobbyState.nameHits = {}; send('lobby', lobbyState); });
+  lobby.on('names', onLobbyNames);
+  lobby.on('players', onLobbyPlayers);
+  lobby.start();
+
+  watcher = new MatchWatcher({ api, store, dataDir: app.getPath('userData'), runScan, watchDir: watchDir() });
+  watcher.on('progress', (p) => send('progress', p));
+  watcher.on('backfill', (b) => { backfillStatus = b; send('backfill', b); });
+  watcher.on('error', (e) => send('log', e.message));
+  watcher.on('match', (m) => {
+    send('match', m);
+    const flagged = m.results.filter((r) => r.flagged);
+    const red = (m.checks || []).filter((c) => c.tier === 'rejected');
+    if (flagged.length) {
+      // Report helper: tells you exactly what to report; you click Report on the scoreboard / in Your Matches.
+      notify('CheaterFlag: report these players',
+        flagged.map((r) => `${r.name}: report for ${r.category} — rounds ${r.rounds.join(', ') || '?'}`).join('\n'), createWindow);
+    } else if (red.length) {
+      notify('CheaterFlag: match checked', `${red.length} player(s) with bans or on the blacklist.`, createWindow);
+    }
+  });
+  watcher.start();
+}
+
+// Silent setup: find CS2, and add launch options whenever Steam happens to be closed.
+function autoConfigure() {
+  try {
+    if (!store.get('cs2Dir')) { const d = steamConfig.findCs2Dir(); if (d) store.set({ cs2Dir: d }); }
+    const id = store.get('steamid');
+    if (id && !steamConfig.launchOptionsStatus(id).ok) steamConfig.applyLaunchOptions(id); // no-op while Steam runs
+    if (gsi && installCfg(store.get('cs2Dir'), gsi.token)) send('log', 'Game-state link installed — it starts working next time CS2 opens.');
+  } catch (e) { send('log', 'Auto-setup: ' + e.message); }
+}
+
+// ---------- first run: import codes/older-match links, then scan older matches once
+function firstRunImport() {
+  for (const f of [path.join(__dirname, '..', 'first-run.json'), path.join(app.getPath('userData'), 'first-run.json')]) {
+    if (!fs.existsSync(f)) continue;
+    try {
+      const d = JSON.parse(fs.readFileSync(f, 'utf8'));
+      const patch = {};
+      if (d.authCode && !store.get('authCode')) patch.authCode = String(d.authCode).trim();
+      if (d.lastShareCode && !store.get('lastShareCode')) patch.lastShareCode = String(d.lastShareCode).trim();
+      if (Array.isArray(d.backfillUrls)) patch.backfillUrls = [...new Set([...(store.get('backfillUrls') || []), ...d.backfillUrls])];
+      store.set(patch);
+      fs.renameSync(f, f + '.imported');
+    } catch (e) { send('log', 'Could not import ' + f + ': ' + e.message); }
+  }
+}
+
+function localDemoFiles() {
+  const dir = store.get('cs2Dir') || steamConfig.findCs2Dir();
+  if (!dir) return [];
+  const out = [];
+  for (const d of [dir, path.join(dir, 'replays')]) {
+    try { for (const f of fs.readdirSync(d)) if (/\.dem$/i.test(f)) out.push(path.join(d, f)); } catch (_) {}
+  }
+  return out;
+}
+
+let backfillRunning = false;
+let backfillStatus = null;
+function startBackfill() {
+  if (backfillRunning || !store.get('token') || !watcher) return;
+  const items = [];
+  // after a scanner update, scan all older matches again with the new version
+  if (store.get('backfillVersion') !== SCANNER_VERSION) {
+    // scanner update: replace undecided flags from the old version, and re-scan every match we still can
+    // (decisions people already made carry over automatically on the server)
+    api.supersede(SCANNER_VERSION).catch((e) => send('log', 'Could not refresh old flags: ' + e.message));
+    const fromHistory = (store.get('history') || []).map((h) => h.demoUrl).filter(Boolean);
+    store.set({ backfillDone: [], backfillVersion: SCANNER_VERSION, backfillUrls: [...new Set([...(store.get('backfillUrls') || []), ...fromHistory])] });
+  }
+  // ...and re-check demos the old version flagged that aren't in that list (keeps or deletes them)
+  if (store.get('scannerVersion') !== SCANNER_VERSION) {
+    const prevFor = (p) => (store.get('history') || []).find((h) => h.keptDemo === p) || {};
+    const urlFor = (p) => prevFor(p).demoUrl || null;
+    try {
+      for (const f of fs.readdirSync(watcher.flaggedDir)) {
+        const id = (f.match(/(\d+_\d+)/) || [])[1];
+        const inList = id && (store.get('backfillUrls') || []).some((u) => u.includes(id));
+        if (/\.dem$/i.test(f) && !inList) { const p = path.join(watcher.flaggedDir, f); items.push({ type: 'kept', path: p, demoUrl: urlFor(p), playedAt: prevFor(p).playedAt || null }); }
+        else if (inList) { try { fs.unlinkSync(path.join(watcher.flaggedDir, f)); } catch (_) {} }  // will be re-downloaded and re-scanned
+      }
+    } catch (_) {}
+    store.set({ scannerVersion: SCANNER_VERSION, history: [] });
+  }
+  items.push(
+    ...(store.get('backfillUrls') || []).map((url) => ({ type: 'url', url })),
+    ...localDemoFiles().map((p) => ({ type: 'file', path: p })),
+  );
+  if (!items.length) return;
+  backfillRunning = true;
+  watcher.backfill(items).catch((e) => send('log', e.message)).finally(() => { backfillRunning = false; });
+}
+
+// Reads the match-history codes and older-match links through the built-in Steam window.
+let connecting = null;
+function connectMatchHistory() {
+  if (connecting) return connecting;
+  connecting = (async () => {
+    send('steamSetup', { step: 'codes', msg: 'Getting your match-history codes from Steam…' });
+    const { authCode, shareCode } = await steamWindow.getMatchCodes(win);
+    if (!authCode) throw new Error('Could not get the Authentication Code from Steam. Use "Do it myself" below.');
+    const patch = { authCode };
+    if (shareCode && !store.get('lastShareCode')) patch.lastShareCode = shareCode;
+    store.set(patch);
+    startServices();
+    send('steamSetup', { step: 'older', msg: 'Finding your older matches…' });
+    try {
+      const urls = await steamWindow.getOlderMatchLinks(win, store.get('steamid'));
+      store.set({ backfillUrls: [...new Set([...(store.get('backfillUrls') || []), ...urls])] });
+      send('steamSetup', { step: 'done', msg: `Connected. Found ${urls.length} older match${urls.length === 1 ? '' : 'es'} to scan.` });
+    } catch (e) {
+      send('steamSetup', { step: 'done', msg: 'Connected. (Older matches could not be read: ' + e.message + ')' });
+    }
+    setTimeout(startBackfill, 3000);
+    return { authCode: !!authCode, shareCode: !!(shareCode || store.get('lastShareCode')) };
+  })().finally(() => { connecting = null; });
+  return connecting;
+}
+
+// ---------- "Watch in CS2": opens the demo at the right moment, spectating the flagged player
+function watchDir() {
+  const cs2 = store.get('cs2Dir') || steamConfig.findCs2Dir();
+  return cs2 ? path.join(cs2, 'cheaterflag') : null;
+}
+let watching = false;
+async function watchDemo({ demoPath, demoUrl, key, tick, steamid }) {
+  if (watching) throw new Error('Already opening a demo — give it a few seconds.');
+  watching = true;
+  try {
+    const dir = watchDir();
+    if (!dir) throw new Error('Could not find your CS2 folder.');
+    let src = demoPath && fs.existsSync(demoPath) ? demoPath : null;
+    if (!src && demoUrl) {
+      send('watch', 'Downloading the demo (about a minute)…');
+      src = await watcher.download(demoUrl, key || 'demo');
+      fs.mkdirSync(watcher.flaggedDir, { recursive: true });
+      const kept = path.join(watcher.flaggedDir, path.basename(src));
+      fs.renameSync(src, kept); src = kept;
+    }
+    if (!src) throw new Error('This demo is no longer on this PC or on Valve\'s servers.');
+    fs.mkdirSync(dir, { recursive: true });
+    const name = path.basename(src, '.dem').replace(/[^A-Za-z0-9_-]/g, '');
+    const dest = path.join(dir, name + '.dem');
+    if (!fs.existsSync(dest)) { send('watch', 'Preparing the demo…'); fs.copyFileSync(src, dest); }
+    const cmds = [`playdemo cheaterflag/${name}`, `demo_gototick ${Math.max(0, Math.floor(tick || 0))}`];
+    if (steamid) cmds.push(`spec_player_by_accountid ${(BigInt(steamid) - STEAM64_BASE).toString()}`);
+
+    const wasOpen = !!lobby.sock;
+    if (!wasOpen) { send('watch', 'Starting CS2…'); shell.openExternal('steam://run/730'); }
+    try { await lobby.ensureNetcon(wasOpen ? 5000 : 180000); }
+    catch (_) { return { manual: cmds }; }
+    if (!wasOpen) await sleep(10000);          // let CS2 finish loading the main menu
+    send('watch', 'Loading the demo in CS2…');
+    await lobby.send(cmds[0]);
+    await sleep(15000);                        // demo load time
+    for (const c of cmds.slice(1)) { await lobby.send(c); await sleep(1500); }
+    send('watch', 'Playing in CS2. If it didn\'t jump to the right moment, open the console (~) and type: ' + cmds.slice(1).join('; '));
+    return { ok: true, manual: cmds };
+  } finally { watching = false; }
+}
+
+// ---------- IPC
+function registerIpc() {
+  const h = (name, fn) => ipcMain.handle(name, async (_e, ...a) => {
+    try { return { ok: true, data: await fn(...a) }; } catch (e) { return { ok: false, error: e.message }; }
+  });
+  h('state', async () => ({ settings: { ...store.all(), token: undefined, history: undefined }, signedIn: !!store.get('token'), lobby: lobbyState, history: store.get('history') || [], version: app.getVersion() }));
+  h('signIn', async () => {
+    const params = await steamWindow.openIdSignIn(win);
+    const r = await api.signIn(params);
+    store.set({ token: r.token, steamid: r.member.steamid, name: r.member.name });
+    autoConfigure();
+    startServices();
+    connectMatchHistory().catch((e) => send('log', e.message)); // same Steam session: usually no second sign-in
+    return r.member;
+  });
+  h('prefs', async () => ({ openAtLogin: store.get('openAtLogin') !== false, notifications: store.get('notifications') !== false }));
+  h('setPrefs', async (p) => {
+    const patch = {};
+    if (typeof p.openAtLogin === 'boolean') { patch.openAtLogin = p.openAtLogin; if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: p.openAtLogin, args: ['--hidden'] }); }
+    if (typeof p.notifications === 'boolean') patch.notifications = p.notifications;
+    store.set(patch); return true;
+  });
+  h('gameState', async () => (gsi ? gsi.state : null));
+  h('autoStatus', async () => ({ backfill: backfillStatus, lastCheck: store.get('lastMatchCheck') || null, connected: !!(store.get('authCode') && store.get('lastShareCode')) }));
+  h('signOut', async () => { store.set({ token: null }); await steamWindow.signOutOfSteamWindow(); return true; });
+  h('connectMatchHistory', () => connectMatchHistory());
+  h('me', () => api.me());
+  h('saveSettings', async (patch) => {
+    const allowed = ['workerUrl', 'authCode', 'lastShareCode', 'cs2Dir', 'netconPort'];
+    const clean = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.includes(k)).map(([k, v]) => [k, String(v || '').trim()]));
+    store.set(clean); startServices(); return true;
+  });
+  h('check', (ids) => api.check(ids));
+  h('blacklist', () => api.blacklist());
+  h('addBlacklist', (e) => api.addBlacklist(e));
+  h('removeBlacklist', (id) => api.removeBlacklist(id));
+  h('flags', (s) => api.flags(s));
+  h('reviewFlag', (id, action) => api.reviewFlag(id, action));
+  h('members', () => api.members());
+  h('setMember', (id, patch) => api.setMember(id, patch));
+  h('setOverride', async (id, tier, note) => {
+    const r = await api.setOverride(id, tier, note);
+    if (tier === 'approved') {   // update already-scanned matches too
+      const hist = (store.get('history') || []).map((h) => ({ ...h, checks: (h.checks || []).map((c) => (c.steamid === id ? { ...c, tier: 'approved', reasons: [note || 'Trusted by admin'] } : c)) }));
+      store.set({ history: hist });
+    }
+    return r;
+  });
+  h('checkMatches', () => watcher.tick());
+  // ---------- guided setup for friends
+  h('setupStatus', async () => {
+    const steamid = store.get('steamid');
+    let member = null;
+    if (store.get('token')) { try { member = (await api.me()).member; } catch (_) {} }
+    return {
+      signedIn: !!member, approved: member?.status === 'approved', memberStatus: member?.status || null,
+      launch: steamid ? steamConfig.launchOptionsStatus(steamid) : { found: false, ok: false },
+      steamRunning: steamConfig.isSteamRunning(),
+      cs2Found: !!(store.get('cs2Dir') || steamConfig.findCs2Dir()),
+      codes: { auth: !!store.get('authCode'), share: !!store.get('lastShareCode') },
+    };
+  });
+  h('applyLaunchOptions', async () => {
+    const r = steamConfig.applyLaunchOptions(store.get('steamid'));
+    if (r.ok) { const d = steamConfig.findCs2Dir(); if (d) store.set({ cs2Dir: d }); startServices(); }
+    return r;
+  });
+  h('openCs2Properties', () => shell.openExternal('steam://gameproperties/730'));
+  h('openAuthPage', () => shell.openExternal('https://help.steampowered.com/en/wizard/HelpWithGameIssue/?appid=730&issueid=128'));
+  h('pasteCodes', async () => {
+    const text = clipboard.readText() || '';
+    const share = text.match(/CSGO(-[A-Za-z0-9]{5}){5}/);
+    // Whole-page copies work: prefer the first "Authentication Code: XXXX-XXXXX-XXXX" (the match-history one)
+    const labeled = text.match(/Authentication Code:\s*([A-Za-z0-9]{4}-[A-Za-z0-9]{5}-[A-Za-z0-9]{4})\b/);
+    const bare = text.replace(/CSGO(-[A-Za-z0-9]{5}){5}/g, '').match(/\b[A-Za-z0-9]{4}-[A-Za-z0-9]{5}-[A-Za-z0-9]{4}\b/);
+    const auth = labeled ? [labeled[1]] : bare;
+    const patch = {};
+    if (auth) patch.authCode = auth[0].toUpperCase();
+    if (share) patch.lastShareCode = share[0];
+    if (Object.keys(patch).length) { store.set(patch); startServices(); }
+    return { auth: !!auth, share: !!share };
+  });
+  h('watchDemo', (opts) => watchDemo(opts || {}));
+  h('clearAllFlags', () => api.clearAllFlags());
+  h('voteFlag', (id, vote) => api.voteFlag(id, vote));
+  h('voteBlacklist', (id, vote) => api.voteBlacklist(id, vote));
+  h('scanShareCode', (code) => watcher.scanShareCode(String(code || '').trim()));
+  h('scanFile', async () => {
+    const r = await dialog.showOpenDialog(win, { title: 'Choose a CS2 demo', filters: [{ name: 'CS2 demo', extensions: ['dem'] }], properties: ['openFile'] });
+    if (r.canceled || !r.filePaths[0]) return null;
+    return watcher.scanFile(r.filePaths[0]);
+  });
+  h('openProfile', (id) => shell.openExternal('https://steamcommunity.com/profiles/' + id));
+  h('openExternal', (u) => { if (/^https:\/\/(help\.steampowered\.com|steamcommunity\.com)\//.test(u)) shell.openExternal(u); });
+  h('copy', (t) => clipboard.writeText(String(t)));
+  h('scanLobby', () => lobby.scanNow());
+}
+
+app.whenReady().then(() => {
+  app.setAppUserModelId('com.ehbaah.cheaterflag');
+  store = new Store(app.getPath('userData'), defaults);
+  if (!store.get('workerUrl') && defaults.workerUrl) store.set({ workerUrl: defaults.workerUrl });
+  api = new Api(() => store.get('workerUrl'), () => store.get('token'));
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: store.get('openAtLogin') !== false, args: ['--hidden'] });
+  registerIpc();
+  createTray();
+  if (!process.argv.includes('--hidden')) createWindow();
+  if (!store.get('gsiToken')) store.set({ gsiToken: require('crypto').randomBytes(12).toString('hex') });
+  gsi = new GameState(store.get('gsiToken'));
+  gsi.on('change', onGameState);
+  gsi.start();
+  firstRunImport();
+  autoConfigure();
+  setInterval(autoConfigure, 60 * 1000); // retries until Steam is closed once
+  startServices();
+  setTimeout(startBackfill, 20000);
+  setTimeout(remindReports, 30000);
+  setTimeout(remindVotes, 60000);
+  try { if (app.isPackaged) require('electron-updater').autoUpdater.checkForUpdatesAndNotify(); } catch (_) {}
+});
+
+app.on('second-instance', createWindow);
+app.on('window-all-closed', () => { /* keep running in the tray */ });

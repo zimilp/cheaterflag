@@ -1,0 +1,14 @@
+{
+  "name": "cheaterflag-bot",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test-code": "node index.js"
+  },
+  "dependencies": {
+    "csgo-sharecode": "^7.0.1",
+    "globaloffensive": "^3.3.0",
+    "steam-user": "^5.2.0"
+  }
+}

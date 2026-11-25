@@ -1,0 +1,11 @@
+{
+  "name": "cheaterflag-workspace",
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix app start",
+    "app": "npm --prefix app start",
+    "bot": "npm --prefix bot start",
+    "deploy": "powershell -ExecutionPolicy Bypass -File deploy-worker.ps1",
+    "publish-app": "powershell -ExecutionPolicy Bypass -File publish.ps1"
+  }
+}

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+secrets.env
+Steam Account.txt
+bot/data/
+worker/.wrangler/
+*.dem
+*.dem.bz2
+first-run.json
+first-run.json.imported
+Claude outputs/
+debug/

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://avatars.steamstatic.com https://avatars.akamai.steamstatic.com data:; style-src 'self'; script-src 'self'" />
+  <title>CheaterFlag</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="dot"></span> CheaterFlag</div>
+    <nav id="tabs">
+      <button data-tab="setup" class="active">Setup</button>
+      <button data-tab="lobby">Lobby</button>
+      <button data-tab="matches">My matches</button>
+      <button data-tab="review">Review</button>
+      <button data-tab="blacklist">Blacklist</button>
+      <button data-tab="members" class="admin-only hidden">Members</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+    <div id="who"></div>
+  </header>
+
+  <main>
+    <section id="tab-setup" class="tab">
+      <h2>Set up CheaterFlag</h2>
+      <p class="muted">Three quick steps. Green ticks mean you're done.</p>
+
+      <div class="card step" id="step1">
+        <div class="row between"><h3><span class="tick" id="t1"></span> 1. Sign in with Steam</h3></div>
+        <p class="muted" id="s1text">A Steam window opens — sign in there. You type your password on Steam's own page; CheaterFlag never sees it.</p>
+        <button id="btnSignIn" class="primary big">Sign in through Steam</button>
+      </div>
+
+      <div class="card step" id="step2">
+        <h3><span class="tick" id="t2"></span> 2. Turn on the lobby scanner</h3>
+        <p class="muted" id="s2text">CheaterFlag adds two settings to CS2 for you. Steam must be closed for a moment.</p>
+        <button id="btnLaunch" class="primary big">Turn it on</button>
+        <details><summary class="muted">Do it myself instead</summary>
+          <p class="muted">Copy this, click <b>Open CS2 settings</b>, and paste it into <b>Launch Options</b>:</p>
+          <div class="row"><code>-condebug -netconport 2121</code><button id="btnCopyFlags">Copy</button><button id="btnOpenProps">Open CS2 settings</button></div>
+        </details>
+      </div>
+
+      <div class="card step" id="step3">
+        <h3><span class="tick" id="t3"></span> 3. Turn on after-game scanning <span class="muted">(recommended)</span></h3>
+        <p class="muted">Lets CheaterFlag find and scan every match you play, plus your recent older matches. Usually automatic after step 1.</p>
+        <button id="btnConnect" class="primary big">Connect my match history</button>
+        <p id="connectMsg" class="muted"></p>
+        <details><summary class="muted">Do it myself instead</summary>
+          <ol class="simple">
+            <li><button id="btnAuthPage">Open Steam's "Game Authentication Codes" page</button>
+              <span class="muted">(Steam's official CS2 support page, in your browser — sign in if it asks)</span></li>
+            <li>Under <b>Access to Your Match History</b>, click <b>Create Authentication Code</b> (skip if a code is already shown).</li>
+            <li>Press <kbd>Ctrl</kbd> + <kbd>A</kbd>, then <kbd>Ctrl</kbd> + <kbd>C</kbd> on that page.</li>
+            <li>Come back and press <button id="btnPaste">Paste</button> <span id="pasteMsg" class="muted"></span></li>
+          </ol>
+        </details>
+        <p class="muted" id="s3text"></p>
+      </div>
+
+      <div class="card done hidden" id="allDone"><h3>✅ All set!</h3><p>CheaterFlag runs in the system tray and starts with Windows. Just play — you'll get a notification if something's wrong.</p></div>
+    </section>
+
+    <section id="tab-lobby" class="tab hidden">
+      <h2>Current match</h2>
+      <p class="muted">As soon as a match loads, CheaterFlag checks it against the shared blacklist. When Steam shows which game server you're on, blacklisted players in the same server are confirmed by SteamID — not just by name. Notifications wait until warmup or the menu, never mid-round. Every account is fully checked (bans + demo scan) right after the match.</p>
+      <p id="lobbyStatus" class="muted"></p>
+      <table><thead><tr><th>Player</th><th>Status</th><th>Why</th><th></th></tr></thead><tbody id="lobbyRows"></tbody></table>
+    </section>
+
+    <section id="tab-matches" class="tab hidden">
+      <h2>My matches</h2>
+      <p class="muted" id="autoStatus">Every match you play is checked automatically.</p>
+      <p id="progress" class="muted"></p>
+      <div id="matchList"></div>
+      <div class="card">
+        <h3>Your stats</h3>
+        <div id="stats" class="muted"></div>
+      </div>
+    </section>
+
+    <section id="tab-review" class="tab hidden">
+      <h2>Review queue</h2>
+      <p class="muted">Strong-evidence flags from everyone's scans, newest match first. Watch the moments, then vote. A flag is decided early when 5+ members vote and 2/3 agree. Otherwise, on day 4 the majority of whatever votes it has decides — even one vote. No votes by day 5 = cleared (Valve deletes match demos after about 6 days, so decisions happen while everyone can still watch). Players already blacklisted are confirmed automatically, and decisions carry over when CheaterFlag updates its scanner. Members are never flagged.</p>
+      <div id="flagList"></div>
+    </section>
+
+    <section id="tab-blacklist" class="tab hidden">
+      <h2>Shared blacklist</h2>
+      <form id="blForm" class="row">
+        <input id="blId" placeholder="SteamID64 or profile URL" required />
+        <select id="blCat"><option>Wallhack</option><option>Aimbot</option><option>Other cheating</option></select>
+        <input id="blReason" placeholder="Reason / evidence" required />
+        <button class="primary">Add</button>
+      </form>
+      <p class="muted">Members can vote to remove a wrong entry (needs 5+ votes with 2/3 agreeing, so one person can't undo it). CheaterFlag members can't be blacklisted. To report a player to Valve, report them once in CS2 from a match you played with them — CheaterFlag reminds you automatically.</p>
+      <table><thead><tr><th>Player</th><th>Category</th><th>Reason</th><th>Added by</th><th>Votes</th><th></th></tr></thead><tbody id="blRows"></tbody></table>
+    </section>
+
+    <section id="tab-members" class="tab hidden">
+      <h2>Members</h2>
+      <p class="muted">Only members you approve can use CheaterFlag and add to the blacklist.</p>
+      <table><thead><tr><th>Member</th><th>Status</th><th>Role</th><th></th></tr></thead><tbody id="memberRows"></tbody></table>
+      <h3>Trust overrides</h3>
+      <form id="ovForm" class="row">
+        <input id="ovId" placeholder="SteamID64" required />
+        <select id="ovTier"><option value="approved">Whitelist (approved)</option><option value="limited">Limited</option><option value="rejected">Reject</option><option value="">Remove override</option></select>
+        <input id="ovNote" placeholder="Note / appeal" />
+        <button>Save</button>
+      </form>
+    </section>
+
+    <section id="tab-settings" class="tab hidden">
+      <h2>Settings</h2>
+      <div class="card">
+        <label class="check"><input type="checkbox" id="pLogin" /> Start CheaterFlag when Windows starts</label>
+        <label class="check"><input type="checkbox" id="pNotify" /> Show notifications</label>
+      </div>
+      <div class="card">
+        <h3>Steam</h3>
+        <p class="muted" id="steamWho"></p>
+        <div class="row"><button id="btnReconnect">Reconnect match history</button><button id="btnSignOut">Sign out</button></div>
+      </div>
+      <p class="muted" id="version"></p>
+    </section>
+
+    <div id="watchBar" class="card"><b>Watch in CS2:</b> <span id="watchMsg" class="muted">Click a ▶ button on a flagged player to open that moment in CS2, spectating them.</span></div>
+    <pre id="log" class="muted"></pre>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

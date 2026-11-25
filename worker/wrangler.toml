@@ -1,0 +1,11 @@
+name = "cheaterflag"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+[triggers]
+crons = ["17 */6 * * *"]   # every 6 h: vote deadlines, expiry, member re-check
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cheaterflag"
+database_id = "6fa2d2ad-4279-4a23-8bd8-14845b765c65"   # filled in by deploy-worker.ps1
