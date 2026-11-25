@@ -46,7 +46,9 @@ $dep = npx wrangler deploy 2>&1 | Out-String
 Write-Host $dep
 if ($LASTEXITCODE -ne 0) { throw 'Deploy failed - see the message above.' }
 Write-Host "== Storing secrets (values are not shown) ==" -ForegroundColor Cyan
-foreach ($k in 'STEAM_API_KEY', 'SESSION_SECRET', 'BOT_SECRET') {
+$secretKeys = @('STEAM_API_KEY', 'SESSION_SECRET', 'BOT_SECRET')
+if ($secrets['GITHUB_DISPATCH_TOKEN']) { $secretKeys += 'GITHUB_DISPATCH_TOKEN' }   # lets the service wake the bot instantly
+foreach ($k in $secretKeys) {
   $secrets[$k] | npx wrangler secret put $k 2>&1 | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "Could not store $k" }
   Write-Host "  $k set"

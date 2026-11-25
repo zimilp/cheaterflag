@@ -170,6 +170,25 @@ async function checkPlayers(env, steamids, opts) {
 }
 
 // ---------------- routes
+// ---- wake the demo bot (a GitHub Actions run) as soon as someone needs a demo link.
+// GitHub's own 5-minute schedule is "best effort" and can be hours late, so we start a run on demand.
+async function meta(env, k) { const r = await env.DB.prepare('SELECT v FROM meta WHERE k = ?').bind(k).first(); return r ? r.v : 0; }
+async function setMeta(env, k, v) { await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind(k, v).run(); }
+async function wakeBot(env) {
+  if (!env.GITHUB_DISPATCH_TOKEN) return;
+  try {
+    if (now() - await meta(env, 'bot_seen') < 45) return;     // a bot is online and will pick the job up
+    if (now() - await meta(env, 'bot_woken') < 150) return;   // a run was just started and is still booting
+    await setMeta(env, 'bot_woken', now());
+    const repo = env.GITHUB_REPO || 'zimilp/cheaterflag';
+    await fetch(`https://api.github.com/repos/${repo}/actions/workflows/bot.yml/dispatches`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + env.GITHUB_DISPATCH_TOKEN, accept: 'application/vnd.github+json', 'user-agent': 'cheaterflag', 'content-type': 'application/json' },
+      body: JSON.stringify({ ref: 'main' }),
+    });
+  } catch (_) { /* the schedule is still a fallback */ }
+}
+
 async function route(req, env) {
   const url = new URL(req.url);
   const p = url.pathname.replace(/\/$/, '') || '/';
@@ -204,6 +223,7 @@ async function route(req, env) {
   if (p.startsWith('/bot/')) {
     if (!env.BOT_SECRET || req.headers.get('x-bot-secret') !== env.BOT_SECRET) throw new HttpError(401, 'Bad bot secret.');
     if (p === '/bot/jobs' && req.method === 'GET') {
+      await setMeta(env, 'bot_seen', now()).catch(() => {});
       const { results } = await env.DB.prepare("SELECT id, share_code FROM demo_jobs WHERE status = 'pending' ORDER BY id LIMIT 10").all();
       return json({ jobs: results });
     }
@@ -407,12 +427,14 @@ async function route(req, env) {
     // retry failed jobs
     await env.DB.prepare("UPDATE demo_jobs SET status = 'pending', error = NULL WHERE share_code = ? AND status = 'error'").bind(body.shareCode).run();
     const j = await env.DB.prepare('SELECT id FROM demo_jobs WHERE share_code = ?').bind(body.shareCode).first();
+    await wakeBot(env);
     return json({ id: j.id });
   }
   const dm = p.match(/^\/demos\/(\d+)$/);
   if (dm) {
     const j = await env.DB.prepare('SELECT id, share_code, status, url, error FROM demo_jobs WHERE id = ?').bind(Number(dm[1])).first();
     if (!j) throw new HttpError(404, 'Job not found.');
+    if (j.status === 'pending') await wakeBot(env);   // a bot run may have ended just before this job arrived
     return json(j);
   }
 

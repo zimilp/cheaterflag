@@ -84,3 +84,9 @@ CREATE TABLE IF NOT EXISTS blacklist_votes ( -- members vote to keep or remove b
   created_at INTEGER NOT NULL,
   PRIMARY KEY (steamid, voter)
 );
+
+-- small key/value state (bot heartbeat, last wake-up)
+CREATE TABLE IF NOT EXISTS meta (
+  k TEXT PRIMARY KEY,
+  v INTEGER
+);

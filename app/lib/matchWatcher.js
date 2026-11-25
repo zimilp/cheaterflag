@@ -77,12 +77,12 @@ class MatchWatcher extends EventEmitter {
     this.emit('progress', { shareCode, step: 'Requesting demo link' });
     const { id } = await this.api.requestDemo(shareCode);
     let job;
-    for (let i = 0; i < 60; i++) {               // up to ~5 min for the bot
+    for (let i = 0; i < 96; i++) {               // up to ~8 min: the bot may need a minute or two to start
       job = await this.api.demoJob(id);
       if (job.status !== 'pending') break;
       await sleep(5000);
     }
-    if (!job || job.status !== 'done') throw new Error(`Demo link failed for ${shareCode}: ${job && job.error || 'timed out (is the bot running?)'}`);
+    if (!job || job.status !== 'done') throw new Error(`Demo link failed for ${shareCode}: ${job && job.error || 'the demo bot didn't answer in time - it will be tried again automatically'}`);
 
     this.emit('progress', { shareCode, step: 'Downloading demo' });
     const demoPath = await this.download(job.url, shareCode);
