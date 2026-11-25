@@ -91,6 +91,7 @@ function watchButtons(moments, opts) {
 
 // ---------- matches + report helper
 async function refreshHistory() { try { const st = await cf.state(); state.history = st.history; } catch (_) {} renderMatches(); }
+const matchOpen = new Map();
 function renderMatches() {
   const list = $('#matchList'); list.replaceChildren();
   const hist = [...(state?.history || [])].sort((a, b) => {
@@ -100,15 +101,30 @@ function renderMatches() {
     return (b.at || 0) - (a.at || 0);
   });
   if (!hist.length) list.append(el('p', { class: 'muted' }, 'No results yet — they appear here as your matches are scanned.'));
-  for (const m of hist) {
+  hist.forEach((m, idx) => {
     const flagged = m.results.filter((r) => r.flagged);
     const checks = Object.fromEntries((m.checks || []).map((c) => [c.steamid, c]));
-    const card = el('div', { class: 'card' + (flagged.length ? ' alert' : '') },
-      el('div', { class: 'row between' }, el('h3', {}, `${prettyMap(m.map)} · ${scoreFor(m, me?.steamid) || 'score unknown'}`), el('span', { class: 'muted' }, m.playedAt ? 'Played ' + new Date(m.playedAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Scanned ' + new Date(m.at).toLocaleString())));
+    const key = m.shareCode || String(m.at);
+    const open = matchOpen.has(key) ? matchOpen.get(key) : idx === 0;   // newest match open, the rest collapsed
+    const cautions = (m.checks || []).filter((c) => c.tier === 'limited').length;
+    const banned = (m.checks || []).filter((c) => c.tier === 'rejected').length;
+    const chips = el('span', { class: 'chips' },
+      flagged.length ? el('span', { class: 'badge rejected' }, `${flagged.length} flagged`) : null,
+      banned ? el('span', { class: 'badge rejected' }, `${banned} banned/blacklisted`) : null,
+      cautions ? el('span', { class: 'badge limited' }, `${cautions} caution`) : null,
+      !flagged.length && !banned && !cautions ? el('span', { class: 'badge approved' }, 'All clean') : null);
+    const card = el('div', { class: 'card match' + (flagged.length ? ' alert' : '') + (open ? ' open' : '') });
+    const body = el('div', { class: 'mbody' });
+    const head = el('div', { class: 'mhead', role: 'button', tabindex: '0', onclick: () => { matchOpen.set(key, !card.classList.contains('open')); card.classList.toggle('open'); } },
+      el('span', { class: 'chev' }, '›'),
+      el('h3', {}, `${prettyMap(m.map)} · ${scoreFor(m, me?.steamid) || 'score unknown'}`),
+      chips,
+      el('span', { class: 'muted when' }, m.playedAt ? 'Played ' + new Date(m.playedAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Scanned ' + new Date(m.at).toLocaleString()));
+    card.append(head, body);
     if (flagged.length) {
-      card.append(el('h4', {}, 'Report these players'));
+      body.append(el('h4', {}, 'Report these players'));
       for (const r of flagged) {
-        card.append(el('div', { class: 'report' },
+        body.append(el('div', { class: 'report' },
           el('b', {}, r.name), ` — report for `, el('b', {}, r.category), ` · rounds ${r.rounds.join(', ') || '?'}`,
           el('ul', {}, r.signals.map((s) => el('li', {}, `${s.name}: ${s.value}`))),
           el('p', { class: 'muted' }, 'In CS2: Watch → Your Matches → this match → scoreboard → right-click player → Report → ' + r.category + '.'),
@@ -116,28 +132,50 @@ function renderMatches() {
           el('button', { onclick: () => cf.copy(r.name) }, 'Copy name')));
       }
     }
-    const t = el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Player'), el('th', {}, 'Account'), el('th', {}, 'Gameplay scan'), el('th', {}, 'Kills'))));
-    const tb = el('tbody');
-    for (const r of m.results) {
+    // ---- two team columns: your team on the left, opponents on the right
+    const playerCard = (r) => {
       const c = checks[r.steamid];
-      const acctWhy = !c ? 'Account check unavailable for this match' : c.reasons.join(' · ');
+      const acctWhy = !c ? 'Account check unavailable' : c.reasons.join(' · ');
       const scanWhy = r.flagged ? r.signals.map((x) => `${x.name}: ${x.value}`).join(' · ')
-        : r.signals.length ? 'Below the flag threshold: ' + r.signals.map((x) => `${x.name}: ${x.value}`).join(' · ')
+        : r.signals.length ? 'Below flag threshold: ' + r.signals.map((x) => `${x.name}: ${x.value}`).join(' · ')
         : 'Nothing suspicious found';
-      tb.append(el('tr', {}, el('td', {}, r.name),
-        el('td', {}, tierBadge(c?.tier), el('div', { class: 'why' }, acctWhy),
+      const scanBadge = r.flagged ? el('span', { class: 'badge rejected' }, r.category)
+        : r.signals.length ? el('span', { class: 'badge limited' }, 'Weak signals') : el('span', { class: 'badge approved' }, 'Clean');
+      const worst = r.flagged ? 'bad' : (c && c.tier === 'rejected') ? 'bad' : (r.signals.length || (c && c.tier === 'limited')) ? 'warn' : 'ok';
+      return el('div', { class: 'pcard ' + worst + (r.steamid === me?.steamid ? ' me' : '') },
+        el('div', { class: 'prow' },
+          el('div', { class: 'pname' }, r.name, r.steamid === me?.steamid ? el('span', { class: 'you' }, 'you') : null),
+          el('div', { class: 'pkills' }, el('b', {}, r.kills), el('span', {}, ' kills'))),
+        el('div', { class: 'pchecks' },
+          el('div', { class: 'pcheck' }, el('span', { class: 'plabel' }, 'Account'), tierBadge(c?.tier), el('span', { class: 'why' }, acctWhy)),
+          el('div', { class: 'pcheck' }, el('span', { class: 'plabel' }, 'Gameplay'), scanBadge, el('span', { class: 'why' }, scanWhy))),
+        el('div', { class: 'pactions' },
           me?.role === 'admin' && c && c.tier !== 'approved' && r.steamid !== me.steamid
-            ? el('button', { class: 'small', title: 'Mark this player as trusted (e.g. a friend or future member)', onclick: (ev) => {
+            ? el('button', { class: 'small', title: 'Mark this player as trusted (e.g. a friend)', onclick: (ev) => {
                 ev.target.disabled = true;
                 cf.setOverride(r.steamid, 'approved', 'Trusted by admin').then(() => { c.tier = 'approved'; c.reasons = ['Trusted by admin']; renderMatches(); log(`${r.name} is now trusted.`); }).catch(fail);
-              } }, 'Trust')
-            : null),
-        el('td', {}, r.flagged ? el('span', { class: 'badge rejected' }, r.category) : r.signals.length ? el('span', { class: 'badge limited' }, 'Weak signals') : el('span', { class: 'badge approved' }, 'Clean'),
-          el('div', { class: 'why' }, scanWhy)),
-        el('td', {}, r.kills)));
+              } }, 'Trust') : null,
+          el('button', { class: 'small link', onclick: () => cf.openProfile(r.steamid) }, 'Steam profile')));
+    };
+    const teams = m.teams || [];
+    const ownT = teams.find((t) => t.players.includes(me?.steamid)) || teams[0];
+    const oppT = teams.find((t) => t !== ownT);
+    const byTeam = (t) => (t ? m.results.filter((r) => t.players.includes(r.steamid)) : []).sort((a, b) => b.kills - a.kills);
+    const own = byTeam(ownT), opp = byTeam(oppT);
+    const rest = m.results.filter((r) => !own.includes(r) && !opp.includes(r));
+    const column = (title, score, rows, cls) => el('div', { class: 'teamcol ' + cls },
+      el('div', { class: 'teamhead' }, el('span', {}, title), score != null ? el('span', { class: 'teamscore' }, score) : null),
+      rows.map(playerCard));
+    if (own.length || opp.length) {
+      body.append(el('div', { class: 'teams' },
+        column(ownT && ownT.players.includes(me?.steamid) ? 'Your team' : 'Team A', ownT ? ownT.score : null, own, 'mine'),
+        column(ownT && ownT.players.includes(me?.steamid) ? 'Opponents' : 'Team B', oppT ? oppT.score : null, opp, 'theirs')));
+      if (rest.length) body.append(column('Other players', null, rest, 'rest'));
+    } else {
+      body.append(el('div', { class: 'teams single' }, column('Players', null, [...m.results].sort((a, b) => b.kills - a.kills), 'mine')));
     }
-    t.append(tb); card.append(t); list.append(card);
-  }
+    list.append(card);
+  });
   const withFlag = hist.filter((m) => m.results.some((r) => r.flagged) || (m.checks || []).some((c) => c.tier === 'rejected')).length;
   $('#stats').textContent = hist.length ? `${hist.length} matches scanned · ${withFlag} had a flagged or banned player (${Math.round((withFlag / hist.length) * 100)}%).` : 'No data yet.';
 }
@@ -244,7 +282,7 @@ async function refreshSetup() {
   tick('#t1', st.approved ? 'ok' : st.signedIn ? 'wait' : '');
   $('#step1').classList.toggle('complete', st.signedIn);
   $('#s1text').textContent = st.approved ? 'Signed in and approved.' :
-    st.memberStatus === 'pending' ? 'Signed in. Waiting for cfab to approve you — you can do steps 2 and 3 meanwhile.' :
+    st.memberStatus === 'pending' ? 'Signed in. Setting up your membership…' :
     st.memberStatus === 'suspended' ? 'Your access is suspended. Contact cfab.' : "A Steam window opens — sign in there. You type your password on Steam's own page; CheaterFlag never sees it.";
   // 2
   tick('#t2', st.launch.ok ? 'ok' : '');

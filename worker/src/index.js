@@ -20,6 +20,10 @@ const DECIDE_AFTER_DAYS = 4;
 const FLAG_EXPIRY_DAYS = 5;
 
 async function applyFlagDecision(env, f, action, actor) {
+  if (action === 'confirm' && await isProtectedMember(env, f.steamid)) {
+    await env.DB.prepare("UPDATE members SET status = 'suspended' WHERE steamid = ?").bind(f.steamid).run();
+    await audit(env, actor, 'member_suspended_cheating', f.steamid, { flag: f.id });
+  }
   if (action === 'confirm') {
     await env.DB.batch([
       env.DB.prepare("UPDATE flags SET status = 'confirmed', reviewed_by = ? WHERE id = ?").bind(actor, f.id),
@@ -65,6 +69,10 @@ async function member(env, req, { approved = true, admin = false } = {}) {
   if (!steamid) throw new HttpError(401, 'Please sign in again.');
   const m = await env.DB.prepare('SELECT * FROM members WHERE steamid = ?').bind(steamid).first();
   if (!m) throw new HttpError(401, 'Unknown member.');
+  if (m.status === 'pending') {   // auto-approve: anyone still waiting is approved the next time their app checks in
+    await env.DB.prepare("UPDATE members SET status = 'approved' WHERE steamid = ?").bind(steamid).run();
+    m.status = 'approved';
+  }
   if (approved && m.status !== 'approved') throw new HttpError(403, m.status === 'suspended' ? 'Your CheaterFlag access is suspended.' : 'Waiting for admin approval.');
   if (admin && m.role !== 'admin') throw new HttpError(403, 'Admins only.');
   await env.DB.prepare('UPDATE members SET last_seen = ? WHERE steamid = ?').bind(now(), steamid).run();
@@ -181,7 +189,7 @@ async function route(req, env) {
       const anyAdmin = await env.DB.prepare("SELECT 1 FROM members WHERE role = 'admin' LIMIT 1").first();
       // the very first person to sign in becomes the admin
       await env.DB.prepare('INSERT INTO members (steamid, name, status, role, created_at, last_seen) VALUES (?,?,?,?,?,?)')
-        .bind(steamid, name, anyAdmin ? 'pending' : 'approved', anyAdmin ? 'member' : 'admin', now(), now()).run();
+        .bind(steamid, name, 'approved', anyAdmin ? 'member' : 'admin', now(), now()).run();   // auto-approve (admin can still suspend)
       await audit(env, steamid, anyAdmin ? 'signup' : 'bootstrap_admin', steamid);
     } else if (name) {
       await env.DB.prepare('UPDATE members SET name = ? WHERE steamid = ?').bind(name, steamid).run();
@@ -263,7 +271,6 @@ async function route(req, env) {
     const id = String(body.steamid || '');
     if (!STEAM64.test(id)) throw new HttpError(400, 'Invalid SteamID64.');
     if (!body.reason) throw new HttpError(400, 'A reason is required.');
-    if (await isProtectedMember(env, id)) throw new HttpError(403, 'That player is a CheaterFlag member and can\'t be blacklisted. The admin can suspend them first if needed.');
     const prof = (await profiles(env, [id])).get(id);
     if (m.role !== 'admin') {   // members' additions go to the review queue for a vote
       await env.DB.prepare('INSERT OR IGNORE INTO flags (share_code, steamid, name, category, score, rounds, signals, map, reporter, created_at, extra) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
@@ -272,6 +279,7 @@ async function route(req, env) {
       await audit(env, m.steamid, 'manual_report', id, { reason: body.reason });
       return json({ ok: true, queued: true });
     }
+    if (id !== m.steamid) await env.DB.prepare("UPDATE members SET status = 'suspended' WHERE steamid = ? AND role != 'admin'").bind(id).run();
     await env.DB.prepare('INSERT OR REPLACE INTO blacklist (steamid, name, category, reason, added_by, created_at) VALUES (?,?,?,?,?,?)')
       .bind(id, prof?.summary?.personaname || null, String(body.category || 'Other cheating').slice(0, 40), String(body.reason).slice(0, 500), m.steamid, now()).run();
     await audit(env, m.steamid, 'blacklist_add', id, { category: body.category, reason: body.reason });
@@ -324,7 +332,6 @@ async function route(req, env) {
   }
   if (p === '/flags' && req.method === 'POST') {
     if (!MATCH_KEY.test(body.shareCode || '') || !STEAM64.test(String(body.steamid || ''))) throw new HttpError(400, 'Invalid flag.');
-    if (await isProtectedMember(env, String(body.steamid))) return json({ ok: true, skipped: 'member' });
     const extra = body.extra && typeof body.extra === 'object' ? {
       moments: (Array.isArray(body.extra.moments) ? body.extra.moments : []).slice(0, 20).map((x) => ({ tick: Number(x.tick) || 0, round: Number(x.round) || 0, what: String(x.what || '').slice(0, 60) })),
       score: body.extra.score && Number.isFinite(+body.extra.score.own) && Number.isFinite(+body.extra.score.opp) ? { own: +body.extra.score.own, opp: +body.extra.score.opp } : null,
@@ -374,12 +381,10 @@ async function route(req, env) {
       const d = strongDecision(t.c || 0, t.k || 0);
       if (!d) return json({ ok: true, outcome: null });
       body.action = d === 'a' ? 'confirm' : 'clear';
-      if (body.action === 'confirm' && await isProtectedMember(env, f.steamid)) throw new HttpError(403, 'That player is a CheaterFlag member and can\'t be blacklisted.');
       await applyFlagDecision(env, f, body.action, 'vote');
       return json({ ok: true, outcome: body.action === 'confirm' ? 'confirmed' : 'cleared' });
     }
     if (!['confirm', 'clear'].includes(body.action)) throw new HttpError(400, 'Unknown action.');
-    if (body.action === 'confirm' && await isProtectedMember(env, f.steamid)) throw new HttpError(403, 'That player is a CheaterFlag member and can\'t be blacklisted.');
     await applyFlagDecision(env, f, body.action, m.steamid);
     return json({ ok: true, outcome: body.action === 'confirm' ? 'confirmed' : 'cleared' });
   }
@@ -462,7 +467,6 @@ async function daily(env) {
   for (const f of due) {
     const d = majorityDecision(f.c || 0, f.k || 0);
     if (!d) continue;
-    if (d === 'a' && await isProtectedMember(env, f.steamid)) continue;
     await applyFlagDecision(env, f, d === 'a' ? 'confirm' : 'clear', 'vote (decision day)');
   }
   // expiry: no decision -> cleared (Valve's copy of the demo is about to expire)

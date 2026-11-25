@@ -82,7 +82,7 @@
 
     <section id="tab-review" class="tab hidden">
       <h2>Review queue</h2>
-      <p class="muted">Strong-evidence flags from everyone's scans, newest match first. Watch the moments, then vote. A flag is decided early when 5+ members vote and 2/3 agree. Otherwise, on day 4 the majority of whatever votes it has decides — even one vote. No votes by day 5 = cleared (Valve deletes match demos after about 6 days, so decisions happen while everyone can still watch). Players already blacklisted are confirmed automatically, and decisions carry over when CheaterFlag updates its scanner. Members are never flagged.</p>
+      <p class="muted">Strong-evidence flags from everyone's scans, newest match first. Watch the moments, then vote. A flag is decided early when 5+ members vote and 2/3 agree. Otherwise, on day 4 the majority of whatever votes it has decides — even one vote. No votes by day 5 = cleared (Valve deletes match demos after about 6 days, so decisions happen while everyone can still watch). Players already blacklisted are confirmed automatically, and decisions carry over when CheaterFlag updates its scanner. Members are scanned too — a confirmed member is suspended and blacklisted.</p>
       <div id="flagList"></div>
     </section>
 
@@ -94,7 +94,7 @@
         <input id="blReason" placeholder="Reason / evidence" required />
         <button class="primary">Add</button>
       </form>
-      <p class="muted">Members can vote to remove a wrong entry (needs 5+ votes with 2/3 agreeing, so one person can't undo it). CheaterFlag members can't be blacklisted. To report a player to Valve, report them once in CS2 from a match you played with them — CheaterFlag reminds you automatically.</p>
+      <p class="muted">Members can vote to remove a wrong entry (needs 5+ votes with 2/3 agreeing, so one person can't undo it). Members can be blacklisted too (they're suspended when that happens). To report a player to Valve, report them once in CS2 from a match you played with them — CheaterFlag reminds you automatically.</p>
       <table><thead><tr><th>Player</th><th>Category</th><th>Reason</th><th>Added by</th><th>Votes</th><th></th></tr></thead><tbody id="blRows"></tbody></table>
     </section>
 
