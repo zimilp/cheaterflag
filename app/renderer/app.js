@@ -311,6 +311,9 @@ async function refreshSetup() {
     !st.signedIn ? 'Do step 1 first.' :
     st.steamRunning ? 'Close Steam first: in Steam click the Steam menu (top-left) → Exit. Then press "Turn it on".' :
     'Steam is closed — press "Turn it on".';
+  const lb = $('#btnLaunch');
+  lb.disabled = st.launch.ok || !st.signedIn || st.steamRunning;
+  lb.textContent = st.launch.ok ? '✓ Turned on' : st.steamRunning && st.signedIn ? 'Waiting for Steam to close…' : 'Turn it on';
   // 3
   const c = st.codes;
   tick('#t3', c.auth && c.share ? 'ok' : (c.auth || c.share) ? 'wait' : '');

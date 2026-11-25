@@ -116,3 +116,4 @@ button.small.link { background:none; border-color:transparent; color:#7fb0ff; pa
 .pmain { min-width:0; }
 label.inline { display:flex; align-items:center; gap:10px; color:var(--text); margin:0; }
 label.inline select { min-width:0; }
+button:disabled, button:disabled:hover { opacity:.45; cursor:not-allowed; filter:none; transform:none; }
