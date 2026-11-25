@@ -154,7 +154,7 @@ async function checkPlayers(env, steamids, opts) {
   const ovm = new Map(ov.results.map((r) => [r.steamid, r]));
   return ids.map((id) => {
     const p = prof.get(id) || {};
-    const { tier, reasons } = members.has(id)
+    const { tier, reasons } = members.has(id) && !(opts && opts.rawForMembers)
       ? { tier: 'approved', reasons: ['CheaterFlag member'] }
       : computeTier({ ...p, blacklisted: blm.get(id), override: ovm.get(id) });
     return { steamid: id, name: p.summary?.personaname || null, avatar: p.summary?.avatar || null, tier, reasons, blacklisted: !!blm.get(id) };
@@ -447,7 +447,7 @@ async function daily(env) {
   const { results } = await env.DB.prepare("SELECT steamid FROM members WHERE status = 'approved' AND role = 'member'").all();
   const ids = results.map((r) => r.steamid);
   for (let i = 0; i < ids.length; i += 100) {
-    const checks = await checkPlayers(env, ids.slice(i, i + 100), { force: true });
+    const checks = await checkPlayers(env, ids.slice(i, i + 100), { force: true, rawForMembers: true });
     for (const c of checks) {
       if (c.tier === 'rejected') {
         await env.DB.prepare("UPDATE members SET status = 'suspended' WHERE steamid = ?").bind(c.steamid).run();

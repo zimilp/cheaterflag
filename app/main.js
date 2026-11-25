@@ -256,6 +256,16 @@ function startBackfill() {
     ...localDemoFiles().map((p) => ({ type: 'file', path: p })),
   );
   if (!items.length) return;
+  // newest matches first (Valve match ids grow over time); own demo files by date
+  const idOf = (it) => { const m = String(it.url || it.path || '').match(/(\d{15,})_\d+/); return m ? BigInt(m[1]) : null; };
+  const timeOf = (it) => { try { return fs.statSync(it.path).mtimeMs; } catch (_) { return 0; } };
+  items.sort((a, b) => {
+    const ia = idOf(a), ib = idOf(b);
+    if (ia != null && ib != null) return ia > ib ? -1 : ia < ib ? 1 : 0;
+    if (ia != null) return -1;
+    if (ib != null) return 1;
+    return timeOf(b) - timeOf(a);
+  });
   backfillRunning = true;
   watcher.backfill(items).catch((e) => send('log', e.message)).finally(() => { backfillRunning = false; });
 }
