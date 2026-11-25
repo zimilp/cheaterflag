@@ -42,13 +42,13 @@ function flushHeld() {
 
 // ---------- demo scanning in a utility process
 let scanSeq = 0; const pending = new Map();
-function runScan(demoPath) {
+function runScan(demoPath, deep = null) {
   if (!scanProc) {
     scanProc = utilityProcess.fork(path.join(__dirname, 'scanWorker.js'));
     scanProc.on('message', (m) => { const p = pending.get(m.id); if (!p) return; pending.delete(m.id); m.ok ? p.resolve(m.scan) : p.reject(new Error(m.error)); });
     scanProc.on('exit', () => { scanProc = null; for (const p of pending.values()) p.reject(new Error('Scanner stopped')); pending.clear(); });
   }
-  return new Promise((resolve, reject) => { const id = ++scanSeq; pending.set(id, { resolve, reject }); scanProc.postMessage({ id, demoPath }); });
+  return new Promise((resolve, reject) => { const id = ++scanSeq; pending.set(id, { resolve, reject }); scanProc.postMessage({ id, demoPath, deep }); });
 }
 
 // ---------- window + tray
@@ -419,6 +419,45 @@ function registerIpc() {
   h('reviewFlag', (id, action) => api.reviewFlag(id, action));
   h('members', () => api.members());
   h('setMember', (id, patch) => api.setMember(id, patch));
+  // Scrutinize: deeper check of one player in one match; anything suspicious goes to Review
+  const scrutinizing = new Set();
+  h('scrutinize', async (key, steamid) => {
+    const job = key + '|' + steamid;
+    if (scrutinizing.has(job)) throw new Error('Already checking this player.');
+    scrutinizing.add(job);
+    try {
+      const m = (store.get('history') || []).find((x) => (x.shareCode || String(x.at)) === key);
+      if (!m) throw new Error('Match not found.');
+      let demo = m.keptDemo && fs.existsSync(m.keptDemo) ? m.keptDemo : null;
+      let downloaded = false;
+      if (!demo) {
+        if (!m.demoUrl) throw new Error("This match's demo is no longer on this PC.");
+        demo = await watcher.download(m.demoUrl, 'scrutiny_' + key);
+        downloaded = true;
+      }
+      const r = await runScan(demo, String(steamid));
+      let sent = null;
+      const prev = m.results.find((x) => x.steamid === r.steamid) || {};
+      if (r.flagged) {
+        sent = await api.submitFlag({
+          shareCode: key, steamid: r.steamid, name: r.name, category: r.category, score: r.score, rounds: r.rounds, signals: r.signals, map: m.map,
+          extra: { scannerVersion: SCANNER_VERSION, scrutinized: true, moments: r.moments, demoUrl: m.demoUrl,
+            score: prev.teamScore != null ? { own: prev.teamScore, opp: prev.oppScore } : null },
+        });
+      }
+      let kept = m.keptDemo;
+      if (!m.local && (downloaded || r.flagged)) {
+        // keep the demo with the other flagged ones, or under the clean-demo setting
+        kept = retention.afterScan(demo, watcher.flaggedDir, r.flagged, watcher.keepCleanDays() > 0 ? watcher.cleanDir : null);
+      }
+      const deep = { flagged: r.flagged, signals: r.signals, category: r.category, moments: r.moments, at: Date.now(), carriedOver: sent && sent.carriedOver || null };
+      const hist = (store.get('history') || []).map((x) => ((x.shareCode || String(x.at)) !== key ? x
+        : { ...x, keptDemo: kept, results: x.results.map((p) => (p.steamid === r.steamid ? { ...p, deep } : p)) }));
+      store.set({ history: hist });
+      send('match', hist.find((x) => (x.shareCode || String(x.at)) === key));
+      return deep;
+    } finally { scrutinizing.delete(job); }
+  });
   h('setOverride', async (id, tier, note) => {
     const r = await api.setOverride(id, tier, note);
     if (tier === 'approved') {   // update already-scanned matches too

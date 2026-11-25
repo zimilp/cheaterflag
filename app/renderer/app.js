@@ -3,6 +3,7 @@ const $ = (s) => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
     if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
   }
   for (const k of kids.flat()) if (k != null) e.append(k instanceof Node ? k : document.createTextNode(String(k)));
@@ -144,14 +145,16 @@ function renderMatches() {
         : r.signals.length ? 'Below flag threshold: ' + r.signals.map((x) => `${x.name}: ${x.value}`).join(' · ')
         : 'Nothing suspicious found');
       const acct = tierBadge(c?.tier); acct.title = 'Account: ' + acctWhy; acct.classList.add('mini');
-      const game = r.flagged ? el('span', { class: 'badge rejected mini' }, r.category)
+      const game = r.flagged || r.deep?.flagged ? el('span', { class: 'badge rejected mini' }, r.flagged ? r.category : r.deep.category)
         : r.signals.length ? el('span', { class: 'badge limited mini' }, 'Weak signals') : el('span', { class: 'badge approved mini' }, 'Clean');
       game.title = 'Gameplay: ' + scanWhy;
-      const worst = r.flagged || (c && c.tier === 'rejected') ? 'bad' : (r.signals.length || (c && c.tier === 'limited')) ? 'warn' : 'ok';
+      const deep = r.deep;
+      const worst = r.flagged || (deep && deep.flagged) || (c && c.tier === 'rejected') ? 'bad' : (r.signals.length || (c && c.tier === 'limited')) ? 'warn' : 'ok';
       // one line for clean players; a short reason line only when something isn't clean
       const notes = [];
       if (c && c.tier !== 'approved') notes.push(acctWhy);
       if (r.flagged || r.signals.length) notes.push(scanWhy);
+      if (deep && deep.flagged) notes.push('Scrutinized: ' + deep.signals.map((x) => `${x.name}: ${x.value}`).join(' · '));
       return el('div', { class: 'pline ' + worst + (r.steamid === me?.steamid ? ' me' : '') },
         el('div', { class: 'pmain' },
           el('a', { href: '#', class: 'pname', title: 'Open Steam profile', onclick: (ev) => { ev.preventDefault(); cf.openProfile(r.steamid); } }, r.name),
@@ -164,7 +167,8 @@ function renderMatches() {
             ? el('button', { class: 'small', title: 'Mark this player as trusted (e.g. a friend)', onclick: (ev) => {
                 ev.target.disabled = true;
                 cf.setOverride(r.steamid, 'approved', 'Trusted by admin').then(() => { c.tier = 'approved'; c.reasons = ['Trusted by admin']; renderMatches(); log(`${r.name} is now trusted.`); }).catch(fail);
-              } }, 'Trust') : null));
+              } }, 'Trust') : null,
+          scrutinizeButton(r, key)));
     };
     const teams = m.teams || [];
     const ownT = teams.find((t) => t.players.includes(me?.steamid)) || teams[0];
@@ -196,6 +200,29 @@ function renderMatches() {
   $('#stats').textContent = hist.length ? `${hist.length} matches scanned · ${withFlag} had a flagged or banned player (${Math.round((withFlag / hist.length) * 100)}%).` : 'No data yet.';
 }
 
+// Scrutinize: a deeper check of one player; anything suspicious goes to Review
+const scrutinyBusy = new Set();
+function scrutinizeButton(r, key) {
+  if (r.steamid === me?.steamid || r.flagged) return null;
+  const d = r.deep, job = key + '|' + r.steamid;
+  if (d) {
+    const label = !d.flagged ? '✓ Scrutinized — clean' : d.carriedOver === 'cleared' ? 'Scrutinized — cleared by vote earlier' : 'Scrutinized — sent to Review';
+    const b = el('button', { class: 'small scrut ' + (d.flagged ? 'bad' : 'ok'), disabled: true,
+      title: d.flagged ? d.signals.map((x) => `${x.name}: ${x.value}`).join(' · ') : 'Extra checks found nothing suspicious (' + new Date(d.at).toLocaleString() + ')' }, label);
+    return b;
+  }
+  const busy = scrutinyBusy.has(job);
+  return el('button', { class: 'small scrut', disabled: busy, title: 'Run extra checks on this player (stricter rules + pre-aim, aim-lock, smoke, headshot and flash checks). Anything suspicious goes to Review.',
+    onclick: (ev) => {
+      ev.stopPropagation();
+      scrutinyBusy.add(job); ev.target.disabled = true; ev.target.textContent = 'Scrutinizing…';
+      log(`Scrutinizing ${r.name}… this takes a minute or two.`);
+      cf.scrutinize(key, r.steamid).then((d) => {
+        log(d.flagged ? `${r.name}: suspicious (${d.signals.map((x) => x.name).join(', ')}) — sent to Review.` : `${r.name}: scrutinized, nothing suspicious.`);
+      }).catch((e) => { fail(e); }).finally(() => { scrutinyBusy.delete(job); refreshHistory(); });
+    } }, busy ? 'Scrutinizing…' : 'Scrutinize');
+}
+
 // ---------- review queue
 async function loadFlags() {
   const box = $('#flagList'); box.replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
@@ -211,7 +238,7 @@ async function loadFlags() {
         el('div', { class: 'row between' }, el('h3', {}, `${f.name} — ${f.category}`), el('span', { class: 'muted' }, `suspicion ${f.score}`)),
         el('p', {}, `${prettyMap(f.map)}${f.extra && f.extra.score ? ` · ${f.extra.score.own}–${f.extra.score.opp} (their team ${f.extra.score.own > f.extra.score.opp ? 'won' : f.extra.score.own < f.extra.score.opp ? 'lost' : 'drew'})` : ''} · rounds to watch: ${(f.rounds || []).join(', ') || '?'}`),
         el('ul', {}, (f.signals || []).map((s) => el('li', {}, `${s.name}: ${s.value}`))),
-        el('p', { class: 'muted' }, `Flagged by ${f.reporter_name || f.reporter}`),
+        el('p', { class: 'muted' }, `${f.extra && f.extra.scrutinized ? 'Scrutinized by' : 'Flagged by'} ${f.reporter_name || f.reporter}`),
         watchButtons(f.extra && f.extra.moments, { demoUrl: f.extra && f.extra.demoUrl, key: f.share_code, steamid: f.steamid }),
         el('p', { class: 'muted' }, `Votes: ${f.cheater_votes} cheater · ${f.clean_votes} not cheating — decided early if 5+ vote and 2/3 agree, otherwise the majority decides on day 4.${f.my_vote ? ' You voted: ' + (f.my_vote === 'cheater' ? 'cheater' : 'not cheating') + '.' : ''}`),
         el('div', { class: 'row' },

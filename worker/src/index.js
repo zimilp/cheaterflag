@@ -338,6 +338,7 @@ async function route(req, env) {
       demoUrl: /^https?:\/\/replay\d+\.valve\.net\/730\/\d+_\d+\.dem(\.bz2)?$/.test(body.extra.demoUrl || '') ? body.extra.demoUrl : null,
     } : null;
     if (extra) extra.scannerVersion = Number(body.extra.scannerVersion) || 0;
+    if (extra && body.extra.scrutinized === true) extra.scrutinized = true;   // manual Scrutinize: survives scanner updates
     const sid64 = String(body.steamid);
     const vals = [String(body.name || '').slice(0, 64), String(body.category || '').slice(0, 40), Number(body.score) || 0,
       JSON.stringify(body.rounds || []).slice(0, 2000), JSON.stringify(body.signals || []).slice(0, 4000), String(body.map || '').slice(0, 40), m.steamid, now(),
@@ -364,7 +365,7 @@ async function route(req, env) {
   if (p === '/flags/supersede' && req.method === 'POST') {
     // a scanner update: undecided flags from older scanner versions are replaced by the re-scan
     const v = Number(body.scannerVersion) || 0;
-    await env.DB.prepare("UPDATE flags SET status = 'cleared', reviewed_by = 'rescan' WHERE status = 'pending' AND share_code NOT LIKE 'file:manual%' AND COALESCE(json_extract(extra, '$.scannerVersion'), 0) < ?").bind(v).run();
+    await env.DB.prepare("UPDATE flags SET status = 'cleared', reviewed_by = 'rescan' WHERE status = 'pending' AND share_code NOT LIKE 'file:manual%' AND COALESCE(json_extract(extra, '$.scrutinized'), 0) = 0 AND COALESCE(json_extract(extra, '$.scannerVersion'), 0) < ?").bind(v).run();
     return json({ ok: true });
   }
   const fm = p.match(/^\/flags\/(\d+)$/);

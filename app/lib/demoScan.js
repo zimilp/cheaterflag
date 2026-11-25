@@ -277,5 +277,110 @@ function scanDemo(demoPath, T = THRESHOLDS) {
   return { mapName: header.map_name || null, players, teams, results };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Scrutinize: a deeper, on-request check of ONE player. Runs the normal checks with the strict
+// thresholds, at twice the sample rate, plus extra checks that are too noisy to run on everyone:
+//   pre-aim  — crosshair already following a hidden enemy just before they come into view
+//   aim lock — crosshair glued to a moving target in the moments before a kill
+//   smoke    — many kills through smoke
+//   headshot — extreme headshot rate
+//   blind    — kills while fully flashed
+// Any one signal sends the player to Review, where members vote.
+const DEEP = {
+  ...THRESHOLDS, sampleEvery: 4, trackMinStreak: 16,      // same ~1 s streak at the finer sample rate
+  preWindow: 24, preMinOnTicks: 16, preMinTurn: 4, preAims: 3, preAimRate: 0.2,
+  lockWindow: 16, lockMaxError: 0.6, lockMinSweep: 4, locks: 3, lockRate: 0.25,
+  smokeKills: 3, smokeRate: 0.2, hsMinKills: 12, hsRate: 0.8, blindKills: 3,
+};
+
+/** data has the same shape as analyze(); killWindows must cover 96 ticks before each of the target's kills. */
+function deepAnalyze(data, steamid, T = DEEP) {
+  const me = sid(steamid);
+  const base = analyze(data, T).find((r) => r.steamid === me);
+  if (!base) throw new Error('That player is not in this demo.');
+  const rows = new Map();
+  for (const r of data.killWindows || []) { if (!rows.has(r.tick)) rows.set(r.tick, new Map()); rows.get(r.tick).set(sid(r.steamid), r); }
+  const at = (t, who) => rows.get(t) && rows.get(t).get(sid(who));
+  const roundStarts = data.roundStarts || [];
+  const m = { kills: 0, headshots: 0, smokeKills: 0, blindKills: 0, preAims: 0, locks: 0, checkedKills: 0 };
+  const moments = [...(base.moments || [])];
+  for (const d of data.deaths || []) {
+    if (sid(d.attacker_steamid) !== me || sid(d.user_steamid) === me || NON_AIM_WEAPONS.test(d.weapon || '')) continue;
+    m.kills += 1;
+    const round = roundAt(d.tick, roundStarts);
+    if (d.headshot) m.headshots += 1;
+    if (d.thrusmoke) { m.smokeKills += 1; moments.push({ tick: d.tick - 96, round, what: 'Kill through smoke' }); }
+    if (d.attackerblind) { m.blindKills += 1; moments.push({ tick: d.tick - 96, round, what: 'Kill while flashed' }); }
+    // first tick the victim was visible to us
+    let firstSpot = null;
+    for (let t = d.tick - 96; t <= d.tick; t++) { const v = at(t, d.user_steamid); const s = v && spottedSet(v); if (s && s.has(me)) { firstSpot = t; break; } }
+    if (firstSpot == null) continue;
+    m.checkedKills += 1;
+    // pre-aim: crosshair on the hidden enemy (and moving with them) just before they appear
+    const from = firstSpot - T.preWindow;
+    if (from >= d.tick - 96) {
+      let on = 0, first = null, last = null;
+      for (let t = from; t < firstSpot; t++) {
+        const a = at(t, me), v = at(t, d.user_steamid);
+        if (!a || !v) continue;
+        first = first || a; last = a;
+        const dist = distance(a, v);
+        if (dist > T.trackMinDistance && aimError(a, v) <= Math.min(T.trackMaxError, Math.atan(T.trackBodyUnits / dist) * 180 / Math.PI)) on += 1;
+      }
+      if (on >= T.preMinOnTicks && first && last && viewDelta(first, last) >= T.preMinTurn) {
+        m.preAims += 1; moments.push({ tick: from - 32, round, what: 'Aimed at an enemy before they were visible' });
+      }
+    }
+    // aim lock: glued to a target that is moving across the screen
+    const s0 = at(d.tick - T.lockWindow, me), v0 = at(d.tick - T.lockWindow, d.user_steamid), s1 = at(d.tick - 1, me), v1 = at(d.tick - 1, d.user_steamid);
+    if (s0 && v0 && s1 && v1 && angleBetween(bearing(s0, v0), bearing(s1, v1)) >= T.lockMinSweep) {
+      let locked = true;
+      for (let t = d.tick - T.lockWindow; t < d.tick && locked; t++) { const a = at(t, me), v = at(t, d.user_steamid); if (!a || !v || aimError(a, v) > T.lockMaxError) locked = false; }
+      if (locked) { m.locks += 1; moments.push({ tick: d.tick - T.lockWindow - 32, round, what: 'Crosshair locked on a moving target' }); }
+    }
+  }
+  const verdict = judge(base.metrics, T, 'high');    // strict thresholds, any one signal counts
+  const signals = [...verdict.signals];
+  const rate = (n, of) => (of ? n / of : 0);
+  if (m.preAims >= T.preAims && rate(m.preAims, m.checkedKills) >= T.preAimRate) signals.push({ type: 'wallhack', name: 'Aimed at enemies before they were visible', value: `${m.preAims} of ${m.checkedKills} kills`, extreme: false });
+  if (m.locks >= T.locks && rate(m.locks, m.checkedKills) >= T.lockRate) signals.push({ type: 'aimbot', name: 'Crosshair locked on moving targets', value: `${m.locks} of ${m.checkedKills} kills`, extreme: false });
+  if (m.smokeKills >= T.smokeKills && rate(m.smokeKills, m.kills) >= T.smokeRate) signals.push({ type: 'wallhack', name: 'Kills through smoke', value: `${m.smokeKills} of ${m.kills} kills`, extreme: false });
+  if (m.kills >= T.hsMinKills && rate(m.headshots, m.kills) >= T.hsRate) signals.push({ type: 'aimbot', name: 'Extreme headshot rate', value: Math.round(rate(m.headshots, m.kills) * 100) + '%', extreme: false });
+  if (m.blindKills >= T.blindKills) signals.push({ type: 'aimbot', name: 'Kills while fully flashed', value: m.blindKills, extreme: false });
+  const wall = signals.filter((x) => x.type === 'wallhack').length, aim = signals.length - wall;
+  const rounds = new Set(base.rounds); for (const x of moments) rounds.add(x.round);
+  return {
+    steamid: me, name: base.name, kills: base.kills, scrutiny: 'deep',
+    flagged: signals.length > 0, signals,
+    category: !signals.length ? null : wall >= aim ? 'Wallhack' : 'Aimbot',
+    score: Math.min(100, signals.reduce((a, x) => a + (x.extreme ? 60 : 35), 0)),
+    rounds: [...rounds].sort((a, b) => a - b),
+    moments: moments.sort((a, b) => a.tick - b.tick).slice(0, 20),
+    metrics: { ...base.metrics, ...m },
+  };
+}
+
+/** Parse a .dem file and scrutinize one player. Heavy: run it in a utility process. */
+function deepScan(demoPath, steamid, T = DEEP) {
+  const dp = require('@laihoe/demoparser2');
+  const players = dp.parsePlayerInfo(demoPath).map((p) => ({ steamid: sid(p.steamid), name: p.name }));
+  const deaths = dp.parseEvent(demoPath, 'player_death', [], ['total_rounds_played']) || [];
+  let roundStarts = [];
+  try { roundStarts = (dp.parseEvent(demoPath, 'round_freeze_end') || []).map((e) => e.tick).sort((a, b) => a - b); } catch (_) {}
+  const header = dp.parseHeader(demoPath) || {};
+  const lastTick = deaths.reduce((x, d) => Math.max(x, d.tick), 0) || Number(header.playback_ticks) || 0;
+  const props = ['X', 'Y', 'Z', 'pitch', 'yaw', 'is_alive', 'team_num', 'approximate_spotted_by'];
+  const sampleList = [];
+  for (let t = 0; t <= lastTick; t += T.sampleEvery) sampleList.push(t);
+  const windowSet = new Set();
+  for (const d of deaths) {
+    const mine = sid(d.attacker_steamid) === sid(steamid);
+    for (let t = d.tick - (mine ? 96 : 64); t <= d.tick; t++) if (t >= 0) windowSet.add(t);
+  }
+  const samples = dp.parseTicks(demoPath, props, sampleList);
+  const killWindows = dp.parseTicks(demoPath, props, [...windowSet]);
+  return deepAnalyze({ players, deaths, roundStarts, samples, killWindows }, steamid, T);
+}
+
 const SCANNER_VERSION = 5;
-module.exports = { analyze, scanDemo, judge, applyScrutiny, THRESHOLDS, STRICT, SCANNER_VERSION };
+module.exports = { analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION };
