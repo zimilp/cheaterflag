@@ -8,7 +8,7 @@ const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { EventEmitter } = require('events');
 const retention = require('./retention');
-const { SCANNER_VERSION } = require('./demoScan');
+const { SCANNER_VERSION, applyScrutiny } = require('./demoScan');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -18,13 +18,16 @@ class MatchWatcher extends EventEmitter {
     Object.assign(this, { api, store, runScan, intervalMs, watchDir });
     this.demoDir = path.join(dataDir, 'demos');
     this.flaggedDir = path.join(this.demoDir, 'flagged');
+    this.cleanDir = path.join(this.demoDir, 'clean');
     this.busy = false;
     this.playedAt = new Map();
   }
 
+  keepCleanDays() { const d = this.store.get('keepCleanDays'); return d == null ? 7 : Number(d) || 0; }
+
   start() {
     fs.mkdirSync(this.demoDir, { recursive: true });
-    retention.sweep(this.demoDir, this.flaggedDir, Date.now(), retention.FLAGGED_DAYS, [this.watchDir]);
+    retention.sweep(this.demoDir, this.flaggedDir, Date.now(), retention.FLAGGED_DAYS, [this.watchDir], this.cleanDir, this.keepCleanDays());
     this.timer = setInterval(() => this.tick(), this.intervalMs);
     setTimeout(() => this.tick(), 15000);
   }
@@ -38,7 +41,7 @@ class MatchWatcher extends EventEmitter {
     this.busy = true;
     this.store.set({ lastMatchCheck: Date.now() });
     try {
-      retention.sweep(this.demoDir, this.flaggedDir, Date.now(), retention.FLAGGED_DAYS, [this.watchDir]);
+      retention.sweep(this.demoDir, this.flaggedDir, Date.now(), retention.FLAGGED_DAYS, [this.watchDir], this.cleanDir, this.keepCleanDays());
       let code = known;
       for (let i = 0; i < 10; i++) {               // catch up on up to 10 matches per run
         const { nextCode } = await this.api.nextMatch(authCode, code);
@@ -96,6 +99,8 @@ class MatchWatcher extends EventEmitter {
     const scan = await this.runScan(demoPath);
     let checks = [];
     try { checks = (await this.api.check(scan.players.map((p) => p.steamid))).players || []; } catch (e) { this.emit('error', e); }
+    // extra scrutiny: players with a Caution/Flagged account are judged with stricter gameplay rules
+    scan.results = applyScrutiny(scan.results, checks);
     const flagged = scan.results.filter((r) => r.flagged);
     for (const r of flagged) {
       await this.api.submitFlag({
@@ -104,7 +109,7 @@ class MatchWatcher extends EventEmitter {
         extra: { scannerVersion: SCANNER_VERSION, moments: r.moments || [], demoUrl, score: r.teamScore != null ? { own: r.teamScore, opp: r.oppScore } : null },
       }).catch((e) => this.emit('error', e));
     }
-    const kept = ownFile ? demoPath : retention.afterScan(demoPath, this.flaggedDir, flagged.length > 0);
+    const kept = ownFile ? demoPath : retention.afterScan(demoPath, this.flaggedDir, flagged.length > 0, this.keepCleanDays() > 0 ? this.cleanDir : null);
     if (!playedAt && ownFile) { try { playedAt = fs.statSync(demoPath).mtimeMs; } catch (_) {} }
     const result = { shareCode: key, map: scan.mapName, teams: scan.teams || [], playedAt, at: Date.now(), results: scan.results, checks, keptDemo: kept, local: ownFile, demoUrl };
     this.store.set({ history: [result, ...(this.store.get('history') || [])].slice(0, 100) });

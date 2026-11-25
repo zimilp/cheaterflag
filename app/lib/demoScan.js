@@ -172,32 +172,55 @@ function analyze(data, T = THRESHOLDS) {
   // ---- 3) verdicts
   const results = [];
   for (const st of stats.values()) {
-    const signals = [];
     const snapRate = st.kills ? st.snaps / st.kills : 0;
     const reactions = st.reactions.slice().sort((a, b) => a - b);
     const medianReaction = reactions.length ? reactions[Math.floor(reactions.length / 2)] : null;
-
-    if (st.wallStreaks >= T.wallStreaks) signals.push({ type: 'wallhack', name: 'Tracked hidden enemies through walls', value: st.wallStreaks, extreme: st.wallStreaks >= T.wallStreaksExtreme });
-    if (st.unseenWallbangs >= T.unseenWallbangs) signals.push({ type: 'wallhack', name: 'Wallbang kills on enemies never seen', value: st.unseenWallbangs, extreme: false });
-    if (st.kills >= T.minKillsForRate && snapRate >= T.snapRate) signals.push({ type: 'aimbot', name: 'Instant snap-to-target kills', value: +(snapRate * 100).toFixed(0) + '%', extreme: snapRate >= T.snapRateExtreme });
-    if (reactions.length >= T.minReactionSamples && medianReaction <= T.reactionTicks) signals.push({ type: 'aimbot', name: 'Inhuman reaction time', value: Math.round(medianReaction * 15.6) + ' ms median', extreme: false });
-
-    // strong evidence = two independent signals, or one extreme signal
-    const strong = signals.length >= 2 || signals.some((s) => s.extreme);
-    const wall = signals.filter((s) => s.type === 'wallhack').length;
-    const aim = signals.filter((s) => s.type === 'aimbot').length;
+    const metrics = { kills: st.kills, wallStreaks: st.wallStreaks, snaps: st.snaps, snapRate: +snapRate.toFixed(3), unseenWallbangs: st.unseenWallbangs,
+      medianReactionTicks: medianReaction, reactionSamples: reactions.length, spottedDataAvailable: st.spottedDataAvailable };
     results.push({
       steamid: st.steamid, name: st.name, kills: st.kills,
-      flagged: strong,
-      category: !signals.length ? null : wall >= aim ? 'Wallhack' : 'Aimbot',
-      score: Math.min(100, signals.reduce((a, s) => a + (s.extreme ? 60 : 35), 0)),
-      signals,
+      ...judge(metrics, T),
       rounds: [...st.rounds].sort((a, b) => a - b),
       moments: st.moments.sort((a, b) => a.tick - b.tick).slice(0, 20),
-      metrics: { wallStreaks: st.wallStreaks, snaps: st.snaps, snapRate: +snapRate.toFixed(3), unseenWallbangs: st.unseenWallbangs, medianReactionTicks: medianReaction, spottedDataAvailable: st.spottedDataAvailable },
+      metrics,
     });
   }
   return results.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Turns a player's measured gameplay into signals and a verdict.
+ * level 'normal'  : standard thresholds; flag = two independent signals or one extreme signal
+ * level 'caution' : stricter thresholds (account is new/private/old-ban); same flag rule
+ * level 'high'    : stricter thresholds and any one signal flags (recent ban or on the blacklist)
+ */
+const STRICT = { wallStreaks: 3, wallStreaksExtreme: 6, unseenWallbangs: 3, snapRate: 0.2, snapRateExtreme: 0.35, minKillsForRate: 8, reactionTicks: 8, minReactionSamples: 6 };
+function judge(m, T = THRESHOLDS, level = 'normal') {
+  const L = level === 'normal' ? T : { ...T, ...STRICT };
+  const signals = [];
+  if (m.wallStreaks >= L.wallStreaks) signals.push({ type: 'wallhack', name: 'Tracked hidden enemies through walls', value: m.wallStreaks, extreme: m.wallStreaks >= L.wallStreaksExtreme });
+  if (m.unseenWallbangs >= L.unseenWallbangs) signals.push({ type: 'wallhack', name: 'Wallbang kills on enemies never seen', value: m.unseenWallbangs, extreme: false });
+  if (m.kills >= L.minKillsForRate && m.snapRate >= L.snapRate) signals.push({ type: 'aimbot', name: 'Instant snap-to-target kills', value: Math.round(m.snapRate * 100) + '%', extreme: m.snapRate >= L.snapRateExtreme });
+  if ((m.reactionSamples || 0) >= L.minReactionSamples && m.medianReactionTicks != null && m.medianReactionTicks <= L.reactionTicks)
+    signals.push({ type: 'aimbot', name: 'Inhuman reaction time', value: Math.round(m.medianReactionTicks * 15.6) + ' ms median', extreme: false });
+  const flagged = level === 'high' ? signals.length >= 1 : signals.length >= 2 || signals.some((x) => x.extreme);
+  const wall = signals.filter((x) => x.type === 'wallhack').length, aim = signals.filter((x) => x.type === 'aimbot').length;
+  return {
+    flagged, signals, scrutiny: level,
+    category: !signals.length ? null : wall >= aim ? 'Wallhack' : 'Aimbot',
+    score: Math.min(100, signals.reduce((a, x) => a + (x.extreme ? 60 : 35), 0) + (level === 'high' && signals.length ? 25 : 0)),
+  };
+}
+
+/** Re-judges scan results with extra scrutiny for players whose account check isn't clean. */
+function applyScrutiny(results, checks, T = THRESHOLDS) {
+  const tierOf = new Map((checks || []).map((c) => [c.steamid, c.tier]));
+  return results.map((r) => {
+    if (!r.metrics) return r;
+    const tier = tierOf.get(r.steamid);
+    const level = tier === 'rejected' ? 'high' : tier === 'limited' ? 'caution' : 'normal';
+    return level === 'normal' ? { ...r, scrutiny: 'normal' } : { ...r, ...judge(r.metrics, T, level) };
+  }).sort((a, b) => b.score - a.score);
 }
 
 /** Final score: [{score, players:[steamid]}] for both teams (empty if unavailable). */
@@ -255,4 +278,4 @@ function scanDemo(demoPath, T = THRESHOLDS) {
 }
 
 const SCANNER_VERSION = 5;
-module.exports = { analyze, scanDemo, THRESHOLDS, SCANNER_VERSION };
+module.exports = { analyze, scanDemo, judge, applyScrutiny, THRESHOLDS, STRICT, SCANNER_VERSION };

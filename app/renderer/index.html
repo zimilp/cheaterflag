@@ -118,6 +118,17 @@
         <label class="check"><input type="checkbox" id="pNotify" /> Show notifications</label>
       </div>
       <div class="card">
+        <h3>Match demos</h3>
+        <p class="muted">Demos with a flagged player are always kept 14 days. Keeping clean ones too lets you re-check a match later or send it in to improve detection. Each demo is about 100–250 MB.</p>
+        <div class="row">
+          <label class="inline">Keep clean match demos for
+            <select id="pKeep"><option value="0">Don't keep</option><option value="3">3 days</option><option value="7">7 days</option><option value="14">14 days</option></select>
+          </label>
+          <span class="muted" id="demoUse"></span>
+          <button class="small" id="btnOpenDemos">Open demo folder</button>
+        </div>
+      </div>
+      <div class="card">
         <h3>Steam</h3>
         <p class="muted" id="steamWho"></p>
         <div class="row"><button id="btnReconnect">Reconnect match history</button><button id="btnSignOut">Sign out</button></div>

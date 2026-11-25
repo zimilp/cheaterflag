@@ -8,6 +8,7 @@ const steamWindow = require('./lib/steamWindow');
 const { LobbyScanner } = require('./lib/lobbyScanner');
 const { MatchWatcher } = require('./lib/matchWatcher');
 const steamConfig = require('./lib/steamConfig');
+const retention = require('./lib/retention');
 const { GameState, installCfg } = require('./lib/gsi');
 const { SCANNER_VERSION } = require('./lib/demoScan');
 const STEAM64_BASE = 76561197960265728n;
@@ -54,7 +55,7 @@ function runScan(demoPath) {
 function createWindow() {
   if (win && !win.isDestroyed()) { win.show(); win.focus(); return; }
   win = new BrowserWindow({
-    width: 1100, height: 760, backgroundColor: '#0f1115', title: 'CheaterFlag', autoHideMenuBar: true,
+    width: 1440, height: 900, minWidth: 980, minHeight: 640, backgroundColor: '#0f1115', title: 'CheaterFlag', autoHideMenuBar: true,
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
@@ -229,6 +230,7 @@ let backfillStatus = null;
 function startBackfill() {
   if (backfillRunning || !store.get('token') || !watcher) return;
   const items = [];
+  const keptIds = new Set();
   // after a scanner update, scan all older matches again with the new version
   if (store.get('backfillVersion') !== SCANNER_VERSION) {
     // scanner update: replace undecided flags from the old version, and re-scan every match we still can
@@ -242,17 +244,22 @@ function startBackfill() {
     const prevFor = (p) => (store.get('history') || []).find((h) => h.keptDemo === p) || {};
     const urlFor = (p) => prevFor(p).demoUrl || null;
     try {
-      for (const f of fs.readdirSync(watcher.flaggedDir)) {
-        const id = (f.match(/(\d+_\d+)/) || [])[1];
-        const inList = id && (store.get('backfillUrls') || []).some((u) => u.includes(id));
-        if (/\.dem$/i.test(f) && !inList) { const p = path.join(watcher.flaggedDir, f); items.push({ type: 'kept', path: p, demoUrl: urlFor(p), playedAt: prevFor(p).playedAt || null }); }
-        else if (inList) { try { fs.unlinkSync(path.join(watcher.flaggedDir, f)); } catch (_) {} }  // will be re-downloaded and re-scanned
+      // demos still on this PC (flagged or kept clean) are re-scanned locally instead of downloaded again
+      for (const dir of [watcher.flaggedDir, watcher.cleanDir]) {
+        if (!fs.existsSync(dir)) continue;
+        for (const f of fs.readdirSync(dir)) {
+          if (!/\.dem$/i.test(f)) continue;
+          const p = path.join(dir, f);
+          const id = (f.match(/(\d+_\d+)/) || [])[1];
+          if (id) keptIds.add(id);
+          items.push({ type: 'kept', path: p, demoUrl: urlFor(p), playedAt: prevFor(p).playedAt || null });
+        }
       }
     } catch (_) {}
     store.set({ scannerVersion: SCANNER_VERSION, history: [] });
   }
   items.push(
-    ...(store.get('backfillUrls') || []).map((url) => ({ type: 'url', url })),
+    ...(store.get('backfillUrls') || []).filter((url) => ![...keptIds].some((id) => url.includes(id))).map((url) => ({ type: 'url', url })),
     ...localDemoFiles().map((p) => ({ type: 'file', path: p })),
   );
   if (!items.length) return;
@@ -381,11 +388,15 @@ function registerIpc() {
     connectMatchHistory().catch((e) => send('log', e.message)); // same Steam session: usually no second sign-in
     return r.member;
   });
-  h('prefs', async () => ({ openAtLogin: store.get('openAtLogin') !== false, notifications: store.get('notifications') !== false }));
+  h('prefs', async () => ({ openAtLogin: store.get('openAtLogin') !== false, notifications: store.get('notifications') !== false,
+    keepCleanDays: store.get('keepCleanDays') == null ? 7 : Number(store.get('keepCleanDays')) }));
+  h('demoUsage', async () => watcher ? retention.usage([watcher.cleanDir, watcher.flaggedDir]) : { bytes: 0, count: 0 });
+  h('openDemos', async () => { if (watcher) { fs.mkdirSync(watcher.demoDir, { recursive: true }); shell.openPath(watcher.demoDir); } });
   h('setPrefs', async (p) => {
     const patch = {};
     if (typeof p.openAtLogin === 'boolean') { patch.openAtLogin = p.openAtLogin; if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: p.openAtLogin, args: ['--hidden'] }); }
     if (typeof p.notifications === 'boolean') patch.notifications = p.notifications;
+    if ([0, 3, 7, 14].includes(Number(p.keepCleanDays))) patch.keepCleanDays = Number(p.keepCleanDays);
     store.set(patch); return true;
   });
   h('updateStatus', async () => updateStatus);

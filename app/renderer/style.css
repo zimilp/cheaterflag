@@ -8,7 +8,7 @@ nav { display:flex; gap:4px; flex:1; }
 nav button { background:none; border:none; color:var(--muted); padding:8px 12px; border-radius:6px; cursor:pointer; }
 nav button.active, nav button:hover { color:var(--text); background:#222733; }
 #who { color:var(--muted); font-size:12px; }
-main { padding:20px; max-width:1100px; margin:0 auto; }
+main { padding:20px 28px; max-width:1440px; margin:0 auto; }
 h2 { margin:0 0 12px; font-size:18px; } h3 { margin:0 0 8px; font-size:15px; } h4 { margin:12px 0 6px; }
 .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin:12px 0; }
 .card.alert { border-color:#5a2a22; }
@@ -84,3 +84,35 @@ button.small.link { background:none; border-color:transparent; color:#7fb0ff; pa
 .card.match.open .chev { transform:rotate(90deg); }
 .mbody { display:none; padding:0 16px 16px; }
 .card.match.open .mbody { display:block; }
+
+/* ---- compact one-line players */
+.teamcol { gap:4px; }
+.pline { background:#12151c; border:1px solid var(--line); border-left:3px solid var(--line); border-radius:6px; padding:6px 10px; }
+.pline.ok { border-left-color:var(--ok); } .pline.warn { border-left-color:var(--warn); } .pline.bad { border-left-color:var(--bad); background:#1a1214; }
+.pline.me { box-shadow:inset 0 0 0 1px #2f6f4f; }
+.pmain { display:flex; align-items:center; gap:8px; min-height:24px; }
+.pmain .pname { color:var(--text); font-weight:600; font-size:14px; text-decoration:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:42%; }
+.pmain .pname:hover { text-decoration:underline; }
+.pbadges { display:flex; align-items:center; gap:5px; margin-left:auto; }
+.pbadges .plabel { width:auto; font-size:10px; color:var(--muted); letter-spacing:.6px; text-transform:uppercase; }
+.badge.mini { font-size:11px; padding:1px 7px; cursor:help; }
+.pk { width:44px; text-align:right; color:var(--muted); font-size:12px; } .pk b { color:var(--text); font-size:14px; }
+.pnote { font-size:11.5px; color:var(--muted); margin-top:3px; display:flex; align-items:center; gap:8px; }
+.pnote button.small { margin-top:0; padding:1px 8px; font-size:11px; }
+
+/* ---- paired team rows: equal column widths and equal row heights */
+.teams.paired { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); column-gap:16px; row-gap:4px; align-items:stretch; }
+.teams.paired .teamhead { margin-bottom:4px; }
+.teams.paired .teamhead.mine { border-color:#2f6f4f; } .teams.paired .teamhead.theirs { border-color:#5a3a2a; }
+.pline.empty { visibility:hidden; }
+.pline { display:flex; flex-direction:column; justify-content:center; }
+@media (max-width: 900px) { .teams.paired { grid-template-columns:1fr; } .pline.empty { display:none; } }
+
+/* ---- every player row the same height: one main line + one single-line note (full text on hover) */
+.pline { height:54px; padding:6px 10px; justify-content:center; }
+.pnote { margin-top:2px; min-width:0; }
+.pnote .ptext { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pnote.clean .ptext { color:#5f6b7d; }
+.pmain { min-width:0; }
+label.inline { display:flex; align-items:center; gap:10px; color:var(--text); margin:0; }
+label.inline select { min-width:0; }

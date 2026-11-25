@@ -139,26 +139,32 @@ function renderMatches() {
     const playerCard = (r) => {
       const c = checks[r.steamid];
       const acctWhy = !c ? 'Account check unavailable' : c.reasons.join(' · ');
-      const scanWhy = r.flagged ? r.signals.map((x) => `${x.name}: ${x.value}`).join(' · ')
+      const strict = r.scrutiny === 'high' ? 'Extra-strict check (banned/blacklisted account): ' : r.scrutiny === 'caution' ? 'Stricter check (Caution account): ' : '';
+      const scanWhy = strict + (r.flagged ? r.signals.map((x) => `${x.name}: ${x.value}`).join(' · ')
         : r.signals.length ? 'Below flag threshold: ' + r.signals.map((x) => `${x.name}: ${x.value}`).join(' · ')
-        : 'Nothing suspicious found';
-      const scanBadge = r.flagged ? el('span', { class: 'badge rejected' }, r.category)
-        : r.signals.length ? el('span', { class: 'badge limited' }, 'Weak signals') : el('span', { class: 'badge approved' }, 'Clean');
-      const worst = r.flagged ? 'bad' : (c && c.tier === 'rejected') ? 'bad' : (r.signals.length || (c && c.tier === 'limited')) ? 'warn' : 'ok';
-      return el('div', { class: 'pcard ' + worst + (r.steamid === me?.steamid ? ' me' : '') },
-        el('div', { class: 'prow' },
-          el('div', { class: 'pname' }, r.name, r.steamid === me?.steamid ? el('span', { class: 'you' }, 'you') : null),
-          el('div', { class: 'pkills' }, el('b', {}, r.kills), el('span', {}, ' kills'))),
-        el('div', { class: 'pchecks' },
-          el('div', { class: 'pcheck' }, el('span', { class: 'plabel' }, 'Account'), tierBadge(c?.tier), el('span', { class: 'why' }, acctWhy)),
-          el('div', { class: 'pcheck' }, el('span', { class: 'plabel' }, 'Gameplay'), scanBadge, el('span', { class: 'why' }, scanWhy))),
-        el('div', { class: 'pactions' },
+        : 'Nothing suspicious found');
+      const acct = tierBadge(c?.tier); acct.title = 'Account: ' + acctWhy; acct.classList.add('mini');
+      const game = r.flagged ? el('span', { class: 'badge rejected mini' }, r.category)
+        : r.signals.length ? el('span', { class: 'badge limited mini' }, 'Weak signals') : el('span', { class: 'badge approved mini' }, 'Clean');
+      game.title = 'Gameplay: ' + scanWhy;
+      const worst = r.flagged || (c && c.tier === 'rejected') ? 'bad' : (r.signals.length || (c && c.tier === 'limited')) ? 'warn' : 'ok';
+      // one line for clean players; a short reason line only when something isn't clean
+      const notes = [];
+      if (c && c.tier !== 'approved') notes.push(acctWhy);
+      if (r.flagged || r.signals.length) notes.push(scanWhy);
+      return el('div', { class: 'pline ' + worst + (r.steamid === me?.steamid ? ' me' : '') },
+        el('div', { class: 'pmain' },
+          el('a', { href: '#', class: 'pname', title: 'Open Steam profile', onclick: (ev) => { ev.preventDefault(); cf.openProfile(r.steamid); } }, r.name),
+          r.steamid === me?.steamid ? el('span', { class: 'you' }, 'you') : null,
+          el('span', { class: 'pbadges' }, el('span', { class: 'plabel' }, 'Acct'), acct, el('span', { class: 'plabel' }, 'Play'), game),
+          el('span', { class: 'pk' }, el('b', {}, r.kills), ' K')),
+        el('div', { class: 'pnote' + (notes.length ? '' : ' clean'), title: notes.length ? notes.join(' · ') : acctWhy },
+          el('span', { class: 'ptext' }, notes.length ? notes.join(' · ') : acctWhy),
           me?.role === 'admin' && c && c.tier !== 'approved' && r.steamid !== me.steamid
             ? el('button', { class: 'small', title: 'Mark this player as trusted (e.g. a friend)', onclick: (ev) => {
                 ev.target.disabled = true;
                 cf.setOverride(r.steamid, 'approved', 'Trusted by admin').then(() => { c.tier = 'approved'; c.reasons = ['Trusted by admin']; renderMatches(); log(`${r.name} is now trusted.`); }).catch(fail);
-              } }, 'Trust') : null,
-          el('button', { class: 'small link', onclick: () => cf.openProfile(r.steamid) }, 'Steam profile')));
+              } }, 'Trust') : null));
     };
     const teams = m.teams || [];
     const ownT = teams.find((t) => t.players.includes(me?.steamid)) || teams[0];
@@ -170,9 +176,16 @@ function renderMatches() {
       el('div', { class: 'teamhead' }, el('span', {}, title), score != null ? el('span', { class: 'teamscore' }, score) : null),
       rows.map(playerCard));
     if (own.length || opp.length) {
-      body.append(el('div', { class: 'teams' },
-        column(ownT && ownT.players.includes(me?.steamid) ? 'Your team' : 'Team A', ownT ? ownT.score : null, own, 'mine'),
-        column(ownT && ownT.players.includes(me?.steamid) ? 'Opponents' : 'Team B', oppT ? oppT.score : null, opp, 'theirs')));
+      // one grid, rows paired side by side, so both teams line up row for row at equal height
+      const mineSide = ownT && ownT.players.includes(me?.steamid);
+      const head = (title, score, cls) => el('div', { class: 'teamhead ' + cls }, el('span', {}, title), score != null ? el('span', { class: 'teamscore' }, score) : null);
+      const grid = el('div', { class: 'teams paired' },
+        head(mineSide ? 'Your team' : 'Team A', ownT ? ownT.score : null, 'mine'),
+        head(mineSide ? 'Opponents' : 'Team B', oppT ? oppT.score : null, 'theirs'));
+      for (let i = 0; i < Math.max(own.length, opp.length); i++) {
+        grid.append(own[i] ? playerCard(own[i]) : el('div', { class: 'pline empty' }), opp[i] ? playerCard(opp[i]) : el('div', { class: 'pline empty' }));
+      }
+      body.append(grid);
       if (rest.length) body.append(column('Other players', null, rest, 'rest'));
     } else {
       body.append(el('div', { class: 'teams single' }, column('Players', null, [...m.results].sort((a, b) => b.kills - a.kills), 'mine')));
@@ -265,6 +278,9 @@ $('#ovForm').addEventListener('submit', (e) => {
 $('#btnSignOut').addEventListener('click', () => cf.signOut().then(init));
 $('#pLogin').addEventListener('change', (e) => cf.setPrefs({ openAtLogin: e.target.checked }));
 $('#pNotify').addEventListener('change', (e) => cf.setPrefs({ notifications: e.target.checked }));
+$('#pKeep').addEventListener('change', (e) => cf.setPrefs({ keepCleanDays: Number(e.target.value) }).then(refreshDemoUse));
+$('#btnOpenDemos').addEventListener('click', () => cf.openDemos());
+function refreshDemoUse() { cf.demoUsage().then((u) => { $('#demoUse').textContent = `${u.count} demo${u.count === 1 ? '' : 's'} stored · ${(u.bytes / 1073741824).toFixed(1)} GB`; }).catch(() => {}); }
 $('#btnReconnect').addEventListener('click', () => { $('#steamWho').textContent = 'Reconnecting… if a Steam window opens, sign in there.'; cf.connectMatchHistory().then(init).catch((e) => { $('#steamWho').textContent = e.message; }); });
 async function refreshAuto() {
   try {
@@ -351,6 +367,7 @@ async function init() {
   $('#who').textContent = me ? `${me.name || me.steamid} · ${me.role}` : 'Not signed in';
   const done = await refreshSetup().catch(() => false);
   const pr = await cf.prefs(); $('#pLogin').checked = pr.openAtLogin; $('#pNotify').checked = pr.notifications;
+  $('#pKeep').value = String(pr.keepCleanDays); refreshDemoUse();
   $('#steamWho').textContent = me ? `Signed in as ${me.name || me.steamid}.` : 'Not signed in.';
   showTab(done ? 'matches' : 'setup');
 }

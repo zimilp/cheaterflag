@@ -21,13 +21,21 @@ export function computeTier({ bans, summary, cs2Minutes, blacklisted, override }
   const lower = (t) => { if (t === 'rejected' || (t === 'limited' && tier === 'approved')) tier = t; };
 
   if (bans) {
-    const banCount = (bans.NumberOfVACBans || 0) + (bans.NumberOfGameBans || 0);
-    if (bans.CommunityBanned) { lower('rejected'); reasons.push('Steam community ban'); }
-    if (banCount > 0) {
-      const recent = (bans.DaysSinceLastBan ?? 99999) < R.recentBanDays;
+    const vac = bans.NumberOfVACBans || 0, game = bans.NumberOfGameBans || 0;
+    const ago = bans.DaysSinceLastBan;
+    const when = ago == null ? '' : ago === 0 ? ' (today)' : ago < 60 ? ` (${ago} days ago)` : ago < 730 ? ` (${Math.round(ago / 30)} months ago)` : ` (${(ago / 365).toFixed(1)} years ago)`;
+    const recent = (ago ?? 99999) < R.recentBanDays;
+    // Steam only tells us the type, count and age of bans - never the game or the exact reason.
+    if (vac > 0) {
       lower(recent ? 'rejected' : 'limited');
-      reasons.push(`${bans.NumberOfVACBans || 0} VAC / ${bans.NumberOfGameBans || 0} game ban(s), last ${bans.DaysSinceLastBan} days ago`);
+      reasons.push(`${vac} VAC ban${vac > 1 ? 's' : ''}${when}: caught by Valve Anti-Cheat running cheat software (game not disclosed by Steam)`);
     }
+    if (game > 0) {
+      lower(recent ? 'rejected' : 'limited');
+      reasons.push(`${game} game ban${game > 1 ? 's' : ''}${vac ? '' : when}: banned by a game's developer, e.g. CS2 Overwatch for cheating or griefing (game not disclosed by Steam)`);
+    }
+    if (bans.CommunityBanned) { lower('rejected'); reasons.push('Steam Community ban: banned by Steam for breaking community rules (spam, scams, abuse)'); }
+    if (bans.EconomyBan && bans.EconomyBan !== 'none') { lower('limited'); reasons.push(`Steam trade ban (${bans.EconomyBan}): blocked from trading, usually for scams or fraud`); }
   } else {
     lower('limited'); reasons.push('Ban status unavailable');
   }
