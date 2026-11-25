@@ -338,6 +338,28 @@ async function watchDemo({ demoPath, demoUrl, key, tick, steamid }) {
   } finally { watching = false; }
 }
 
+// ---------- automatic updates: check at start and every hour; install as soon as it's downloaded,
+// unless a match is being played (then right after it ends). The app restarts itself in the background.
+function setupAutoUpdate() {
+  if (!app.isPackaged) return;
+  let au;
+  try { au = require('electron-updater').autoUpdater; } catch (_) { return; }
+  au.autoDownload = true;
+  au.autoInstallOnAppQuit = true;
+  let ready = false;
+  const install = () => {
+    if (!ready || (gsi && gsi.quietTime())) return;
+    app.isQuitting = true;
+    au.quitAndInstall(true, true);   // silent install, then reopen
+  };
+  au.on('update-downloaded', () => { ready = true; send('log', 'Update downloaded — installing.'); install(); });
+  au.on('error', () => {});
+  if (gsi) gsi.on('change', (next) => { if (!next.inMatch) install(); });
+  const check = () => au.checkForUpdates().catch(() => {});
+  check();
+  setInterval(check, 60 * 60 * 1000);
+}
+
 // ---------- IPC
 function registerIpc() {
   const h = (name, fn) => ipcMain.handle(name, async (_e, ...a) => {
@@ -456,7 +478,7 @@ app.whenReady().then(() => {
   setTimeout(startBackfill, 20000);
   setTimeout(remindReports, 30000);
   setTimeout(remindVotes, 60000);
-  try { if (app.isPackaged) require('electron-updater').autoUpdater.checkForUpdatesAndNotify(); } catch (_) {}
+  setupAutoUpdate();
 });
 
 app.on('second-instance', createWindow);
