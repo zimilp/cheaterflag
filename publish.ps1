@@ -8,7 +8,7 @@ Set-Location $PSScriptRoot
 
 # GitHub only runs workflows from .github/workflows
 New-Item -ItemType Directory -Force -Path '.github\workflows' | Out-Null
-Copy-Item 'ci\release.yml' '.github\workflows\release.yml' -Force
+Copy-Item 'ci\*.yml' '.github\workflows\' -Force
 
 if (-not (Test-Path '.git')) {
   git init -b main | Out-Null

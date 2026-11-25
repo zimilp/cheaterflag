@@ -20,11 +20,15 @@ function loadEnv(file) {
 }
 
 const env = { ...loadEnv(path.join(__dirname, '..', 'secrets.env')), ...process.env };
+// Cloud mode (GitHub Actions): `node index.js --once` signs in with a saved login token, handles
+// waiting demo requests for a few minutes, then exits. Never asks for codes, never logs match details.
+const ONCE = process.argv.includes('--once');
+if (!env.WORKER_URL) { try { env.WORKER_URL = require('../app/config.json').workerUrl; } catch (_) {} }
 const DATA = path.join(__dirname, 'data');
 const TOKEN_FILE = path.join(DATA, 'refresh-token.txt');
 fs.mkdirSync(DATA, { recursive: true });
 
-for (const k of ['BOT_USERNAME', 'WORKER_URL', 'BOT_SECRET']) {
+for (const k of ONCE ? ['WORKER_URL', 'BOT_SECRET', 'BOT_REFRESH_TOKEN'] : ['BOT_USERNAME', 'WORKER_URL', 'BOT_SECRET']) {
   if (!env[k]) { console.error(`Missing ${k} in secrets.env`); process.exit(1); }
 }
 const WORKER = env.WORKER_URL.replace(/\/$/, '');
@@ -35,6 +39,7 @@ const client = new SteamUser({ renewRefreshTokens: true });
 const csgo = new GlobalOffensive(client);
 
 client.on('steamGuard', async (domain, callback, lastCodeWrong) => {
+  if (ONCE) { console.error('The saved bot login has expired. Run "npm run cloud-bot" on your PC again.'); process.exit(1); }
   if (lastCodeWrong) log('That Steam Guard code was wrong - try the newest code.');
   if (domain) {
     callback(await ask(`Steam Guard code (emailed to ${domain}): `));
@@ -53,7 +58,7 @@ client.on('steamGuard', async (domain, callback, lastCodeWrong) => {
     callback(code.toUpperCase());
   }
 });
-client.on('refreshToken', (t) => { fs.writeFileSync(TOKEN_FILE, t); log('Saved login token — no password or code needed next time.'); });
+client.on('refreshToken', (t) => { if (ONCE) return; fs.writeFileSync(TOKEN_FILE, t); log('Saved login token — no password or code needed next time.'); });
 client.on('loggedOn', () => { log('Signed in to Steam as the bot account.'); client.gamesPlayed([730]); setTimeout(() => { if (!csgo.haveGCSession) log('Still connecting to CS2 servers...'); }, 20000); });
 client.on('error', (e) => { log('Steam error:', e.message); if (/InvalidPassword|AccessDenied/.test(e.message)) try { fs.unlinkSync(TOKEN_FILE); } catch (_) {} setTimeout(logOn, 60000); });
 client.on('disconnected', (_r, msg) => log('Disconnected from Steam:', msg));
@@ -61,6 +66,7 @@ csgo.on('connectedToGC', () => log('Connected to the CS2 game coordinator.'));
 csgo.on('disconnectedFromGC', (r) => log('Game coordinator disconnected:', r));
 
 function logOn() {
+  if (ONCE) return client.logOn({ refreshToken: env.BOT_REFRESH_TOKEN.trim() });
   if (fs.existsSync(TOKEN_FILE)) client.logOn({ refreshToken: fs.readFileSync(TOKEN_FILE, 'utf8').trim() });
   else {
     if (!env.BOT_PASSWORD) { console.error('Missing BOT_PASSWORD in secrets.env'); process.exit(1); }
@@ -100,10 +106,10 @@ async function poll() {
       try {
         const url = await resolveShareCode(j.share_code);
         await worker('POST', `/bot/jobs/${j.id}`, { url });
-        log('Demo link found for', j.share_code);
+        log(ONCE ? 'Demo link found.' : 'Demo link found for ' + j.share_code);
       } catch (e) {
         await worker('POST', `/bot/jobs/${j.id}`, { error: e.message });
-        log('Failed', j.share_code, '-', e.message);
+        log(ONCE ? 'Demo request failed: ' + e.message : 'Failed ' + j.share_code + ' - ' + e.message);
       }
       await new Promise((r) => setTimeout(r, 2000)); // be gentle with Valve
     }
@@ -119,4 +125,15 @@ csgo.on('connectedToGC', async () => {
 });
 
 logOn();
-if (!testCode) setInterval(poll, 10000);
+if (ONCE) {
+  // cloud run: work for ~4.5 minutes (the next run starts right after), hard stop at 7 minutes
+  const RUN_MS = 270000;
+  const started = Date.now();
+  setTimeout(() => { console.error('Timed out.'); process.exit(1); }, 420000);
+  setTimeout(() => { if (!csgo.haveGCSession) { console.error('Could not reach the CS2 game coordinator.'); process.exit(1); } }, 120000);
+  csgo.on('connectedToGC', async () => {
+    while (Date.now() - started < RUN_MS) { await poll(); await new Promise((r) => setTimeout(r, 10000)); }
+    log('Run finished.');
+    client.logOff(); setTimeout(() => process.exit(0), 2000);
+  });
+} else if (!testCode) setInterval(poll, 10000);
