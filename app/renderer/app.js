@@ -168,7 +168,7 @@ function renderMatches() {
                 ev.target.disabled = true;
                 cf.setOverride(r.steamid, 'approved', 'Trusted by admin').then(() => { c.tier = 'approved'; c.reasons = ['Trusted by admin']; renderMatches(); log(`${r.name} is now trusted.`); }).catch(fail);
               } }, 'Trust') : null,
-          scrutinizeButton(r, key)));
+          scrutinizeButton(r, key, c)));
     };
     const teams = m.teams || [];
     const ownT = teams.find((t) => t.players.includes(me?.steamid)) || teams[0];
@@ -202,9 +202,12 @@ function renderMatches() {
 
 // Scrutinize: a deeper check of one player; anything suspicious goes to Review
 const scrutinyBusy = new Set();
-function scrutinizeButton(r, key) {
+function scrutinizeButton(r, key, c) {
   if (r.steamid === me?.steamid || r.flagged) return null;
   const d = r.deep, job = key + '|' + r.steamid;
+  // only for players who already look off: Caution or Flagged account, or weak gameplay signals
+  const suspect = (c && (c.tier === 'limited' || c.tier === 'rejected')) || r.signals.length > 0;
+  if (!suspect && !d) return null;
   if (d) {
     const label = !d.flagged ? '✓ Scrutinized — clean' : d.carriedOver === 'cleared' ? 'Scrutinized — cleared by vote earlier' : 'Scrutinized — sent to Review';
     const b = el('button', { class: 'small scrut ' + (d.flagged ? 'bad' : 'ok'), disabled: true,
