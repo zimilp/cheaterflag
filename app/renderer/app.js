@@ -14,9 +14,12 @@ const fail = (e) => log(e.message || e);
 
 let me = null, state = null;
 
+let watchActive = false;
+function showWatchBar(on) { if (on !== undefined) watchActive = on; const t = document.querySelector('#tabs button.active')?.dataset.tab; $('#watchBar').classList.toggle('hidden', !(watchActive && (t === 'matches' || t === 'review'))); }
 function showTab(name) {
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab').forEach((s) => s.classList.toggle('hidden', s.id !== 'tab-' + name));
+  setTimeout(() => showWatchBar(), 0);
   ({ setup: refreshSetup, matches: () => { refreshHistory(); refreshAuto(); }, review: loadFlags, blacklist: loadBlacklist, members: loadMembers })[name]?.();
 }
 document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -82,7 +85,7 @@ function watchButtons(moments, opts) {
   if (!moments || !moments.length || (!opts.demoPath && !opts.demoUrl)) return null;
   return el('div', { class: 'row watch' }, moments.slice(0, 6).map((mo) =>
     el('button', { onclick: () => {
-      $('#watchMsg').textContent = 'Opening CS2…';
+      showWatchBar(true); $('#watchMsg').textContent = 'Opening CS2…';
       cf.watchDemo({ ...opts, tick: mo.tick }).then((r) => {
         if (r && !r.ok && r.manual) $('#watchMsg').textContent = 'Open CS2, press ~ for the console, and run these one at a time: ' + r.manual.join('  →  ');
       }).catch((e) => { $('#watchMsg').textContent = e.message; });
@@ -334,7 +337,7 @@ cf.on('goto', (t) => showTab(t));
 cf.on('update', (t) => { $('#updStatus').textContent = '· ' + t; });
 $('#btnCheckUpd').addEventListener('click', () => { $('#updStatus').textContent = '· Checking…'; cf.checkUpdates().then((r) => { if (r !== true) $('#updStatus').textContent = '· ' + r; }).catch(fail); });
 cf.updateStatus().then((t) => { if (t) $('#updStatus').textContent = '· ' + t; }).catch(() => {});
-cf.on('watch', (m) => { $('#watchMsg').textContent = m; });
+cf.on('watch', (m) => { showWatchBar(true); $('#watchMsg').textContent = m; });
 cf.on('backfill', (b) => { $('#progress').textContent = b.finished ? 'Older matches: all scanned.' : `Scanning your older matches: ${b.current} of ${b.total}… (runs in the background)`; });
 
 async function init() {
