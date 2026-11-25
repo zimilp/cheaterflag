@@ -117,7 +117,7 @@ async function poll() {
 }
 
 // test mode: node index.js CSGO-xxxxx-xxxxx-xxxxx-xxxxx-xxxxx
-const testCode = process.argv[2];
+const testCode = process.argv.slice(2).find((a) => /^CSGO-/.test(a));
 csgo.on('connectedToGC', async () => {
   if (!testCode) return;
   try { log('Demo URL:', await resolveShareCode(testCode)); } catch (e) { log('Test failed:', e.message); }
