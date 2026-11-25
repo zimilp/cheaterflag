@@ -82,7 +82,7 @@ class MatchWatcher extends EventEmitter {
       if (job.status !== 'pending') break;
       await sleep(5000);
     }
-    if (!job || job.status !== 'done') throw new Error(`Demo link failed for ${shareCode}: ${job && job.error || 'the demo bot didn't answer in time - it will be tried again automatically'}`);
+    if (!job || job.status !== 'done') throw new Error(`Demo link failed for ${shareCode}: ${job && job.error || 'the demo bot did not answer in time - it will be tried again automatically'}`);
 
     this.emit('progress', { shareCode, step: 'Downloading demo' });
     const demoPath = await this.download(job.url, shareCode);

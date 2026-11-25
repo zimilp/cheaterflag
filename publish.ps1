@@ -20,6 +20,14 @@ foreach ($f in 'secrets.env', 'Steam Account.txt') {
   if (git ls-files $f) { throw "$f is tracked by git - stopping." }
 }
 
+# Never publish a build that can't start: run the app's checks first
+Write-Host "== Running checks ==" -ForegroundColor Cyan
+Push-Location app
+npm test
+$testCode = $LASTEXITCODE
+Pop-Location
+if ($testCode -ne 0) { throw 'Checks failed - nothing was published. Send the message above to Claude.' }
+
 $pkgPath = Join-Path $PSScriptRoot 'app\package.json'
 $pkgText = [IO.File]::ReadAllText($pkgPath)
 $pkg = $pkgText | ConvertFrom-Json
