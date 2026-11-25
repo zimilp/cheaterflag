@@ -331,6 +331,9 @@ cf.on('progress', (p) => { $('#progress').textContent = `${p.shareCode}: ${p.ste
 cf.on('match', () => refreshHistory());
 cf.on('log', log);
 cf.on('goto', (t) => showTab(t));
+cf.on('update', (t) => { $('#updStatus').textContent = '· ' + t; });
+$('#btnCheckUpd').addEventListener('click', () => { $('#updStatus').textContent = '· Checking…'; cf.checkUpdates().then((r) => { if (r !== true) $('#updStatus').textContent = '· ' + r; }).catch(fail); });
+cf.updateStatus().then((t) => { if (t) $('#updStatus').textContent = '· ' + t; }).catch(() => {});
 cf.on('watch', (m) => { $('#watchMsg').textContent = m; });
 cf.on('backfill', (b) => { $('#progress').textContent = b.finished ? 'Older matches: all scanned.' : `Scanning your older matches: ${b.current} of ${b.total}… (runs in the background)`; });
 

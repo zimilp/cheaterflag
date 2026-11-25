@@ -340,6 +340,7 @@ async function watchDemo({ demoPath, demoUrl, key, tick, steamid }) {
 
 // ---------- automatic updates: check at start and every hour; install as soon as it's downloaded,
 // unless a match is being played (then right after it ends). The app restarts itself in the background.
+let updateStatus = '';
 function setupAutoUpdate() {
   if (!app.isPackaged) return;
   let au;
@@ -352,8 +353,13 @@ function setupAutoUpdate() {
     app.isQuitting = true;
     au.quitAndInstall(true, true);   // silent install, then reopen
   };
-  au.on('update-downloaded', () => { ready = true; send('log', 'Update downloaded — installing.'); install(); });
-  au.on('error', () => {});
+  const status = (text) => { updateStatus = text; send('update', text); };
+  au.on('checking-for-update', () => status('Checking for updates…'));
+  au.on('update-not-available', () => status('Up to date.'));
+  au.on('update-available', (i) => status(`Downloading version ${i.version}…`));
+  au.on('download-progress', (p) => status(`Downloading update… ${Math.round(p.percent)}%`));
+  au.on('update-downloaded', (i) => { ready = true; status(`Version ${i.version} downloaded — installing${gsi && gsi.quietTime() ? ' after your match' : ''}.`); install(); });
+  au.on('error', (e) => status('Update problem: ' + (e && e.message ? e.message.split('\n')[0] : e) + ' — you can always install the latest version from the download link.'));
   if (gsi) gsi.on('change', (next) => { if (!next.inMatch) install(); });
   const check = () => au.checkForUpdates().catch(() => {});
   check();
@@ -382,6 +388,8 @@ function registerIpc() {
     if (typeof p.notifications === 'boolean') patch.notifications = p.notifications;
     store.set(patch); return true;
   });
+  h('updateStatus', async () => updateStatus);
+  h('checkUpdates', async () => { try { await require('electron-updater').autoUpdater.checkForUpdates(); } catch (e) { return e.message; } return true; });
   h('gameState', async () => (gsi ? gsi.state : null));
   h('autoStatus', async () => ({ backfill: backfillStatus, lastCheck: store.get('lastMatchCheck') || null, connected: !!(store.get('authCode') && store.get('lastShareCode')) }));
   h('signOut', async () => { store.set({ token: null }); await steamWindow.signOutOfSteamWindow(); return true; });
