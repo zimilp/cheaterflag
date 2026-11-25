@@ -229,7 +229,7 @@ async function refreshAuto() {
   try {
     const a = await cf.autoStatus();
     const parts = [];
-    parts.push(a.connected ? 'New matches are checked every 10 minutes' + (a.lastCheck ? ` (last check ${new Date(a.lastCheck).toLocaleTimeString()})` : '') + '.' : 'Finish Setup step 3 to check your matches automatically.');
+    parts.push(a.connected ? 'Each match is scanned as soon as it ends and Steam has the demo' + (a.lastCheck ? ` (last check ${new Date(a.lastCheck).toLocaleTimeString()})` : '') + '.' : 'Finish Setup step 3 to check your matches automatically.');
     if (a.backfill && !a.backfill.finished) parts.push(`Scanning your older matches: ${a.backfill.current} of ${a.backfill.total}.`);
     $('#autoStatus').textContent = parts.join(' ');
   } catch (_) {}

@@ -13,7 +13,7 @@ const { SCANNER_VERSION } = require('./demoScan');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 class MatchWatcher extends EventEmitter {
-  constructor({ api, store, dataDir, runScan, intervalMs = 10 * 60 * 1000, watchDir = null }) {
+  constructor({ api, store, dataDir, runScan, intervalMs = 30 * 60 * 1000, watchDir = null }) {
     super();
     Object.assign(this, { api, store, runScan, intervalMs, watchDir });
     this.demoDir = path.join(dataDir, 'demos');
@@ -33,7 +33,8 @@ class MatchWatcher extends EventEmitter {
   async tick() {
     if (this.busy) return;
     const authCode = this.store.get('authCode'), known = this.store.get('lastShareCode');
-    if (!authCode || !known || !this.store.get('token')) return;
+    if (!authCode || !known || !this.store.get('token')) return 0;
+    let found = 0;
     this.busy = true;
     this.store.set({ lastMatchCheck: Date.now() });
     try {
@@ -45,10 +46,28 @@ class MatchWatcher extends EventEmitter {
         await this.processMatch(nextCode);
         code = nextCode;
         this.store.set({ lastShareCode: code });
+        found++;
       }
     } catch (e) {
       this.emit('error', e);
     } finally { this.busy = false; }
+    return found;
+  }
+
+  /**
+   * Right after a match ends: check every minute (for up to 25 minutes) until Steam lists the new match,
+   * then scan it straight away. Regular checks are only a fallback (every 30 minutes).
+   */
+  async afterMatch() {
+    if (this.fast) return;
+    this.fast = true;
+    try {
+      for (let i = 0; i < 25; i++) {
+        await sleep(60 * 1000);
+        if (this.busy) continue;
+        if ((await this.tick()) > 0) return;
+      }
+    } finally { this.fast = false; }
   }
 
   async processMatch(shareCode) {

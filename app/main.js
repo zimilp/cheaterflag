@@ -116,7 +116,7 @@ function onGameState(next, prev) {
     setTimeout(liveCheck, 8000);
     clearInterval(liveTimer); liveTimer = setInterval(liveCheck, 60000);
   }
-  if (!next.inMatch && prev.inMatch) { clearInterval(liveTimer); liveTimer = null; }
+  if (!next.inMatch && prev.inMatch) { clearInterval(liveTimer); liveTimer = null; if (watcher) watcher.afterMatch(); } // scan it as soon as Steam has it
   if (!next.inMatch) { flushHeld(); remindVotes(); }
 }
 
