@@ -20,8 +20,22 @@ foreach ($f in 'secrets.env', 'Steam Account.txt') {
   if (git ls-files $f) { throw "$f is tracked by git - stopping." }
 }
 
-$pkg = Get-Content 'app\package.json' -Raw | ConvertFrom-Json
-if (-not $Version) { $Version = $pkg.version }
+$pkgPath = Join-Path $PSScriptRoot 'app\package.json'
+$pkgText = [IO.File]::ReadAllText($pkgPath)
+$pkg = $pkgText | ConvertFrom-Json
+if (-not $Version) {
+  $Version = $pkg.version
+  # This version was already released: apps only update to a NEW number, so bump it (0.1.7 -> 0.1.8)
+  git fetch --tags origin 2>$null | Out-Null
+  while (git tag --list "v$Version") {
+    $p = $Version.Split('.'); $p[2] = [string]([int]$p[2] + 1); $Version = $p -join '.'
+  }
+}
+if ($Version -ne $pkg.version) {
+  $pkgText = $pkgText -replace '"version":\s*"[^"]+"', ('"version": "' + $Version + '"')
+  [IO.File]::WriteAllText($pkgPath, $pkgText)   # UTF-8 without BOM
+  Write-Host "Version set to $Version" -ForegroundColor Cyan
+}
 git add -A
 git commit -m "CheaterFlag v$Version" 2>$null | Out-Null
 git push -u origin main          # first time: a browser window asks you to sign in to GitHub

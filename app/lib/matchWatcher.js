@@ -171,7 +171,9 @@ class MatchWatcher extends EventEmitter {
   async download(url, shareCode) {
     const safe = shareCode.replace(/[^A-Za-z0-9_-]/g, '');
     const out = path.join(this.demoDir, safe + '.dem');
-    const res = await fetch(url);
+    let res;
+    try { res = await fetch(url); }
+    catch (_) { throw new Error("Couldn't download the match demo from Valve (internet hiccup?). It will try again later."); }
     if (!res.ok) throw new Error(`Demo download failed (HTTP ${res.status}) — Valve may have expired it.`);
     // Valve uploads the demo when the match ends, so its timestamp is when the match was played
     const lm = Date.parse(res.headers.get('last-modified') || '');

@@ -7,11 +7,16 @@ class Api {
   async req(method, route, body) {
     const base = (this.getBase() || '').replace(/\/$/, '');
     if (!base) throw new Error('CheaterFlag service URL is not set (Settings).');
-    const res = await fetch(base + route, {
-      method,
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (this.getToken() || '') },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(base + route, {
+        method,
+        headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (this.getToken() || '') },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (_) {
+      throw new Error("Couldn't reach the CheaterFlag service (internet hiccup?). It will try again automatically.");
+    }
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { data = { error: text }; }
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
