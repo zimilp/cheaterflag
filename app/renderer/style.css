@@ -154,6 +154,8 @@ table.stats tbody tr:hover td { background:#1a1f2a; }
 .extra h4 { margin:0 0 8px; }
 .deaths .death { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:4px 0; }
 .deaths .death .row.watch { margin:0; }
-.recap .leads { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:10px; }
-.recap .lead { display:flex; flex-direction:column; gap:2px; background:#161a22; border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+.recap .leads { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0, 1fr); gap:8px; }   /* always one row */
+.recap .lead { display:flex; flex-direction:column; gap:1px; background:#161a22; border:1px solid var(--line); border-radius:8px; padding:6px 10px; min-width:0; }
+.recap .lead > * { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.recap h3 { margin:0 0 8px; }
 .recap .lead .muted { font-size:12px; }
