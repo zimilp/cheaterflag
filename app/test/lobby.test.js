@@ -47,12 +47,19 @@ test('rejoining the same server keeps the player list', () => {
 11/26 12:09:29 cfab connected
 11/26 12:09:29 Xinhai connected
 11/26 12:09:30 freeman connected`);
-  l.feed(`11/26 12:23:12 [HostStateManager] Host activate: Idle (levelload)
-11/26 12:23:43 [HostStateManager] Host activate: Remote Connect (=[A:1:2537009174:52699])
+  let ended = 0; l.on('matchEnd', () => ended++);
+  l.feed(`11/26 12:23:12 [HostStateManager] Host activate: Idle (levelload)`);
+  assert.equal(ended, 1);                        // back in the menu: list cleared
+  assert.equal(l.names.size, 0);
+  l.feed(`11/26 12:23:43 [HostStateManager] Host activate: Remote Connect (=[A:1:2537009174:52699])
 11/26 12:23:44 cfab connected`);
-  assert.deepEqual(last, ['Xinhai', 'freeman']);
+  l.restoreIfRejoin();                           // (normally 20 s later)
+  clearTimeout(l.rejoinTimer);
+  assert.deepEqual(last, ['Xinhai', 'freeman']);   // rejoined: earlier list is back
   assert.equal(l.names.size, 2);
-  l.feed(`11/26 13:00:00 [HostStateManager] Host activate: Remote Connect (=[A:1:999:1])
+  l.feed(`11/26 12:44:30 [HostStateManager] Host activate: Idle (levelload)
+11/26 13:00:00 [HostStateManager] Host activate: Remote Connect (=[A:1:999:1])
 11/26 13:00:01 Rook connected`);
+  clearTimeout(l.rejoinTimer);
   assert.deepEqual(last, ['Rook']);
 });

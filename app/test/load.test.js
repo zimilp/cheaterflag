@@ -7,7 +7,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const root = path.join(__dirname, '..');
-const files = ['bootstrap.js', 'main.js', 'preload.js', 'scanWorker.js', 'renderer/app.js', ...fs.readdirSync(path.join(root, 'lib')).filter((f) => f.endsWith('.js')).map((f) => 'lib/' + f)];
+const files = ['bootstrap.js', 'main.js', 'preload.js', 'scanWorker.js', 'renderer/app.js', 'renderer/roles.js', ...fs.readdirSync(path.join(root, 'lib')).filter((f) => f.endsWith('.js')).map((f) => 'lib/' + f)];
 for (const f of files) {
   test('syntax ok: ' + f, () => {
     assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', path.join(root, f)], { stdio: 'pipe' }));

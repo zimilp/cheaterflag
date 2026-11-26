@@ -32,6 +32,66 @@ function toSteam64(input) {
 }
 
 // ---------- lobby
+// ---------- squad plan (members you're queued / playing with)
+const HOW = { you: 'you', party: 'in your party', server: 'in this match', name: 'name in this lobby' };
+function renderSquad(l) {
+  const card = $('#squadCard');
+  const squad = l.squad || [];
+  if (!squad.length) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  const mapName = (l.map || '').replace(/^(de|cs)_/, '');
+  const pretty = mapName ? mapName[0].toUpperCase() + mapName.slice(1) : '';
+  // use stats on this map when there's enough of it, otherwise all maps
+  const rows = squad.map((p) => {
+    const onMap = p.onMap && p.onMap.demo && (p.onMap.demo.rounds || 0) >= Roles.MIN_ROUNDS ? p.onMap.demo : null;
+    return { steamid: p.steamid, name: p.name, how: p.how, demo: onMap || p.demo || {}, mapBased: !!onMap };
+  });
+  const plan = Roles.squadPlan(rows);
+  $('#squadTitle').textContent = pretty ? `Squad plan · ${pretty}` : 'Squad plan';
+  $('#squadNote').textContent = 'Roles from each player’s own demo stats' + (pretty ? ` (on ${pretty} when they have 20+ rounds there)` : '') + ' — hover a role for the numbers.';
+  const fitText = (s, role) => {
+    if (!s || !s.enough) return 'Not enough demo data yet';
+    const pctOf = (v, ref) => Math.round(v * ref * 100) + '%';
+    return ({ awp: `${pctOf(s.awp, 0.3)} of kills with the AWP`, entry: `takes the first fight in ${pctOf(s.entry, 0.2)} of rounds`,
+      lurk: `away from the team in ${pctOf(s.lurk, 0.35)} of T rounds`, support: `utility score ${(s.support * 0.6).toFixed(2)} per round`,
+      anchorA: `holds A in ${pctOf(s.anchorA, 0.5)} of CT rounds`, anchorB: `holds B in ${pctOf(s.anchorB, 0.5)} of CT rounds`,
+      rotator: `plays between sites in ${pctOf(s.rotator, 0.5)} of CT rounds`, rifler: 'no stand-out T role — plays as a rifler' })[role] || '';
+  };
+  const tag = (role, s) => (role ? el('span', { class: 'role role-' + role, title: fitText(s, role) }, Roles.LABEL[role]) : el('span', { class: 'muted' }, '—'));
+  $('#squadTable').replaceChildren(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Player'), el('th', {}, 'T side'), el('th', {}, 'CT side'))),
+    el('tbody', {}, rows.map((r) => {
+      const p = plan.get(r.steamid);
+      return el('tr', { class: r.how === 'you' ? 'me' : '' },
+        el('td', {}, r.name, el('div', { class: 'muted small' }, HOW[r.how] + (r.mapBased ? ` · ${pretty} stats` : ' · all maps'))),
+        el('td', {}, tag(p.t, p.fit)), el('td', {}, tag(p.ct, p.fit)));
+    }))));
+  // map: bombsites and each player's own usual CT spot for their role (from their demos on this map)
+  const box = $('#squadMap');
+  const mapRows = squad.map((p) => (p.onMap && p.onMap.demo) || null).filter(Boolean);
+  const sites = Roles.siteCentres(mapRows);
+  const dots = rows.map((r) => { const p = plan.get(r.steamid); const d = (squad.find((x) => x.steamid === r.steamid).onMap || {}).demo; const at = d && Roles.holdSpot(d, p.ct); return at && p.ct ? { ...at, name: r.name, role: p.ct } : null; }).filter(Boolean);
+  if (!pretty || (!sites.A && !sites.B) || !dots.length) {
+    box.replaceChildren(el('p', { class: 'muted small' }, pretty ? `The map plan appears once your squad has demos on ${pretty}.` : 'The map plan appears when the match loads.'));
+    return;
+  }
+  const pts = [...dots, ...[sites.A, sites.B].filter(Boolean)];
+  const minX = Math.min(...pts.map((p) => p.x)) - 600, maxX = Math.max(...pts.map((p) => p.x)) + 600;
+  const minY = Math.min(...pts.map((p) => p.y)) - 600, maxY = Math.max(...pts.map((p) => p.y)) + 600;
+  const W = 360, H = Math.round(W * (maxY - minY) / Math.max(1, maxX - minX)) || 260;
+  const sx = (x) => ((x - minX) / (maxX - minX)) * W, sy = (y) => H - ((y - minY) / (maxY - minY)) * H;   // game Y points up
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${Math.min(Math.max(H, 180), 420)}`); svg.setAttribute('class', 'squadsvg');
+  const add = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text) e.textContent = text; svg.append(e); return e; };
+  for (const [k, c] of Object.entries(sites)) if (c) { add('circle', { cx: sx(c.x), cy: sy(c.y), r: 34, class: 'site' }); add('text', { x: sx(c.x), y: sy(c.y) + 8, class: 'sitelabel' }, k); }
+  for (const d of dots) {
+    add('circle', { cx: sx(d.x), cy: sy(d.y), r: 7, class: 'dot role-' + d.role });
+    const right = sx(d.x) > W * 0.55;
+    add('text', { x: sx(d.x) + (right ? -10 : 10), y: sy(d.y) + 4, class: 'dotlabel', 'text-anchor': right ? 'end' : 'start' }, `${d.name} · ${Roles.LABEL[d.role]}`);
+  }
+  box.replaceChildren(svg, el('p', { class: 'muted small' }, `CT setup on ${pretty}: where each player usually stands 20 s into a CT round, from their own demos. Sites from the same demos.`));
+}
+
 function renderLobby(l) {
   const names = l.names || [];
   const conf = (l.live && l.live.confirmed) || [];
@@ -215,6 +275,7 @@ const z = (o, k) => (o && o[k]) || 0;
 const STAT_COLS = [
   { key: 'name', label: 'Member', rate: (p) => p.name || p.steamid, text: true },
   { key: 'award', label: 'Top award', rate: (p) => topAward(p).n, fmt: (v, p) => { const t = topAward(p); return t.k ? `${AWARD_LABEL[t.k] || t.k}${t.n ? ` ×${t.n}` : ''}` : '—'; } },
+  { key: 'role', label: 'Best roles', text: true, rate: (p) => { const r = Roles.naturalRoles(p.demo); return r ? `${Roles.LABEL[r.t]}${r.ct !== r.t ? ' · ' + Roles.LABEL[r.ct] : ''}` : '—'; }, tip: 'T-side · CT-side role from their own demo stats (20+ rounds needed)' },
   { key: 'matches', label: 'Matches', rate: (p) => p.matches, tip: 'Every Premier/Competitive match from Steam history, FACEIT matches, and scanned demos' },
   { key: 'win', label: 'Win %', rate: (p) => pct(z(p.all, 'wins'), z(p.all, 'wins') + z(p.all, 'losses') + z(p.all, 'ties')), total: (p) => z(p.all, 'wins'), totalLabel: 'Wins' },
   { key: 'kd', label: 'K/D', rate: (p) => per(z(p.all, 'kills'), Math.max(1, z(p.all, 'deaths')), 2), total: (p) => z(p.all, 'kills'), totalLabel: 'Kills' },
@@ -480,7 +541,7 @@ $('#btnPaste').addEventListener('click', () => cf.pasteCodes().then((r) => {
 }).catch(fail));
 setInterval(() => { if (!$('#tab-setup').classList.contains('hidden')) refreshSetup().catch(() => {}); }, 5000);
 
-cf.on('lobby', (l) => { if (state) state.lobby = l; renderLobby(l); });
+cf.on('lobby', (l) => { if (state) state.lobby = l; renderLobby(l); renderSquad(l); });
 cf.on('progress', (p) => { $('#progress').textContent = `${p.shareCode}: ${p.step}…`; });
 cf.on('match', () => refreshHistory());
 cf.on('log', log);

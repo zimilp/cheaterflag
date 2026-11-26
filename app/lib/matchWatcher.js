@@ -11,7 +11,8 @@ const retention = require('./retention');
 const { SCANNER_VERSION, applyScrutiny } = require('./demoScan');
 const { awards } = require('./matchStats');
 
-const AWARDS_VERSION = 2;   // bump when award rules change: saved matches get their awards recalculated
+const AWARDS_VERSION = 2;
+const STATS_VERSION = 2;    // bump when new stats are counted: saved demos get counted again   // bump when award rules change: saved matches get their awards recalculated
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 class MatchWatcher extends EventEmitter {
@@ -127,7 +128,7 @@ class MatchWatcher extends EventEmitter {
     const stats = new Map(result.results.filter((r) => r.stats).map((r) => [r.steamid, r.stats]));
     const aw = awards(stats, members);
     for (const r of result.results) { if (members.has(r.steamid) && r.stats) r.awards = aw.get(r.steamid) || []; else { delete r.awards; } }
-    result.statsV = 1;
+    result.statsV = STATS_VERSION;
     result.awardsV = AWARDS_VERSION;
   }
 
@@ -214,4 +215,4 @@ class MatchWatcher extends EventEmitter {
   }
 }
 
-module.exports = { AWARDS_VERSION, MatchWatcher };
+module.exports = { AWARDS_VERSION, STATS_VERSION, MatchWatcher };

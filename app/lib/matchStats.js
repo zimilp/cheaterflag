@@ -3,12 +3,14 @@
 // computeStats(data) works on already-parsed data (testable); parseStats(demoPath) parses a demo itself.
 
 const sid = (v) => (v == null ? null : String(v));
-const TRADE_TICKS = 5 * 64;           // a kill within 5 s of a teammate's death avenges it
+const TRADE_TICKS = 5 * 64;
+const SITE_RANGE = 1100;              // units from a bombsite centre that still count as "holding that site"
+const LURK_RANGE = 1200;              // units from the nearest teammate that count as lurking           // a kill within 5 s of a teammate's death avenges it
 const UTIL = /hegrenade|inferno|molotov|incgrenade/;
 const KNIFE = /knife|bayonet/;
 const FIELDS = ['rounds', 'kills', 'deaths', 'assists', 'headshots', 'damage', 'utilDamage', 'flashAssists', 'enemiesFlashed', 'teamFlashSecs',
   'entryKills', 'firstDeaths', 'trades', 'clutchWins', 'clutchAttempts', 'bestClutch', 'saves', 'plants', 'defuses', 'ninjaDefuses',
-  'k3', 'k4', 'aces', 'awpKills', 'knifeKills', 'wallbangs', 'smokeKills', 'blindKills', 'noscopes', 'teamKills', 'distance'];
+  'roundsT', 'roundsCT', 'ctA', 'ctB', 'tLurk', 'ctN', 'ctX', 'ctY', 'ctAX', 'ctAY', 'ctBX', 'ctBY', 'siteAX', 'siteAY', 'siteAN', 'siteBX', 'siteBY', 'siteBN', 'k3', 'k4', 'aces', 'awpKills', 'knifeKills', 'wallbangs', 'smokeKills', 'blindKills', 'noscopes', 'teamKills', 'distance'];
 
 const blank = () => Object.fromEntries(FIELDS.map((f) => [f, 0]));
 const dist2d = (a, b) => Math.hypot(a.X - b.X, a.Y - b.Y);
@@ -47,6 +49,25 @@ function computeStats(data) {
   }
   const roundOf = (t) => rounds.find((r) => t > r.start - 64 && t <= r.end + 64);
   const teamAt = (id, t) => { const r = roundOf(t); return r ? r.team.get(sid(id)) : undefined; };
+
+  // ---- bombsite centres from where players stand inside "BombsiteA"/"BombsiteB" (CS2 place names)
+  const snaps = tickOf(data.snaps);
+  const centre = { A: [0, 0, 0], B: [0, 0, 0] };
+  for (const r of data.snaps || []) {
+    const m = String(r.last_place_name || '').match(/bombsite\s*([ab])/i);
+    if (m && r.X != null) { const c = centre[m[1].toUpperCase()]; c[0] += r.X; c[1] += r.Y; c[2] += 1; }
+  }
+  const siteOf = (row) => {
+    const m = String(row.last_place_name || '').match(/bombsite\s*([ab])/i);
+    if (m) return m[1].toUpperCase();
+    let best = null, bestD = SITE_RANGE;
+    for (const k of ['A', 'B']) {
+      const c = centre[k]; if (!c[2]) continue;
+      const d = Math.hypot(row.X - c[0] / c[2], row.Y - c[1] / c[2]);
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    return best;
+  };
 
   // ---- kills and deaths
   for (const r of rounds) {
@@ -99,6 +120,23 @@ function computeStats(data) {
       const s = st(c.id); s.clutchAttempts += 1;
       if (r.winner === t) { s.clutchWins += 1; s.bestClutch = Math.max(s.bestClutch, c.vs); }
     }
+    // positions for role tags: CT site 20 s into the round (anchor A / B), T distance to teammates at 30 s (lurker)
+    for (const [id, t] of r.team) {
+      const me = st(id);
+      if (t === 3) me.roundsCT += 1; else me.roundsT += 1;
+      const at = t === 3 ? r.start + 20 * 64 : r.start + 30 * 64;
+      if (at >= r.end) continue;
+      const row = snaps.get(at) && snaps.get(at).get(id);
+      if (!row || row.is_alive === false || row.X == null) continue;
+      if (t === 3) {
+        const site = siteOf(row);
+        me.ctN += 1; me.ctX += row.X; me.ctY += row.Y;           // where they usually hold (for the map plan)
+        if (site === 'A') { me.ctA += 1; me.ctAX += row.X; me.ctAY += row.Y; } else if (site === 'B') { me.ctB += 1; me.ctBX += row.X; me.ctBY += row.Y; }
+      } else {
+        const mates = [...snaps.get(at)].filter(([oid, o]) => oid !== id && r.team.get(oid) === 2 && o.is_alive !== false && o.X != null);
+        if (mates.length && Math.min(...mates.map(([, o]) => dist2d(row, o))) > LURK_RANGE) me.tLurk += 1;
+      }
+    }
     for (const [id, n] of killsThisRound) { const s = st(id); if (n === 3) s.k3 += 1; else if (n === 4) s.k4 += 1; else if (n >= 5) s.aces += 1; }
     if (r.winner) for (const [id, al] of alive) if (al && r.team.get(id) !== r.winner) st(id).saves += 1;
     // ninja defuse: defused with a T still alive
@@ -142,6 +180,10 @@ function computeStats(data) {
       last.set(id, r);
     }
   }
+  for (const x of S.values()) {
+    if (centre.A[2]) { x.siteAX = centre.A[0] / centre.A[2]; x.siteAY = centre.A[1] / centre.A[2]; x.siteAN = 1; }
+    if (centre.B[2]) { x.siteBX = centre.B[0] / centre.B[2]; x.siteBY = centre.B[1] / centre.B[2]; x.siteBN = 1; }
+  }
   for (const s of S.values()) { s.teamFlashSecs = Math.round(s.teamFlashSecs * 10) / 10; s.distance = Math.round(s.distance); }
   return S;
 }
@@ -160,8 +202,12 @@ function parseStats(demoPath, base = {}) {
     const list = []; for (let t = 0; t <= lastTick; t += 8) list.push(t);
     samples = dp.parseTicks(demoPath, ['X', 'Y', 'is_alive', 'team_num'], list);
   }
+  const snapTicks = [];
+  for (const fe of roundStarts) snapTicks.push(fe + 20 * 64, fe + 30 * 64);
+  let snaps = [];
+  try { if (snapTicks.length) snaps = dp.parseTicks(demoPath, ['X', 'Y', 'is_alive', 'team_num', 'last_place_name'], snapTicks); } catch (_) {}
   return computeStats({
-    players, deaths, roundStarts, roundEnds, samples,
+    players, deaths, roundStarts, roundEnds, samples, snaps,
     hurts: ev('player_hurt'), blinds: ev('player_blind'), plants: ev('bomb_planted'), defuses: ev('bomb_defused'),
   });
 }

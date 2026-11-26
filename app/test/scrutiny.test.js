@@ -59,3 +59,16 @@ test('scrutinize flags aim locks and smoke kills, and clears a normal player', (
   assert.ok(smoky.signals.some((x) => /smoke/.test(x.name)));
   assert.throws(() => deepAnalyze(fight({ kills: 1, lockOn: false, smoke: false }), 'nobody'));
 });
+
+test('players who left early are put on the right team', () => {
+  const { addLeavers } = require('../lib/demoScan');
+  const teams = [{ score: 6, players: ['a', 'b'] }, { score: 13, players: ['x', 'y'] }];
+  const samples = [];
+  for (let t = 0; t < 10; t++) {          // first half: a, b, quitter on 3; x, y on 2
+    samples.push({ tick: t, steamid: 'a', team_num: 3 }, { tick: t, steamid: 'b', team_num: 3 }, { tick: t, steamid: 'quitter', team_num: 3 },
+      { tick: t, steamid: 'x', team_num: 2 }, { tick: t, steamid: 'y', team_num: 2 });
+  }
+  addLeavers(teams, [{ steamid: 'a' }, { steamid: 'quitter' }, { steamid: 'ghost' }], samples);
+  assert.deepEqual(teams[0].players, ['a', 'b', 'quitter']);
+  assert.ok(!teams[1].players.includes('quitter'));
+});

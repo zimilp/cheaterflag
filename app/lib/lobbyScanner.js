@@ -103,7 +103,7 @@ class LobbyScanner extends EventEmitter {
           for (let j = i - 1; j >= 0; j--) { const sv = matchServer(lines[j]); if (sv && sv !== server) break; if (sv === server) i = j; }
         }
         const rest = lines.slice(i);
-        if (i >= 0 && !leftAfter.some((l) => /CSGO_GAME_UI_STATE_\w+ -> CSGO_GAME_UI_STATE_MAINMENU/.test(l) && !/LOADINGSCREEN/.test(l)) ) setTimeout(() => this.feed(rest.join('\n')), 0);
+        if (i >= 0 && !leftAfter.some((l) => /CSGO_GAME_UI_STATE_\w+ -> CSGO_GAME_UI_STATE_MAINMENU/.test(l) && !/LOADINGSCREEN/.test(l)) ) setTimeout(() => { this.feed(rest.join('\n')); this.restoreIfRejoin(); }, 0);
       } catch (_) {}
     }
     let n = 0;
@@ -116,10 +116,22 @@ class LobbyScanner extends EventEmitter {
   feed(text) {
     const fresh = [];
     for (const line of text.split(/\r?\n/)) {
+      // back in the main menu: the match is over (or we dropped out) — keep the list aside for a quick rejoin
+      if (/Host activate: Idle/.test(stripPrefix(line)) && this.server) {
+        this.prev = { server: this.server, names: [...this.names], at: Date.now() };
+        this.server = null; this.map = null; this.current.clear(); this.names.clear();
+        this.emit('matchEnd');
+        continue;
+      }
+      const mp = stripPrefix(line).match(/^Map: "([^"]+)"/);
+      if (mp && mp[1] !== '<empty>' && mp[1] !== this.map) { this.map = mp[1]; this.emit('map', this.map); }
       const server = matchServer(line);
       if (server && server !== this.server) {
         this.server = server;
         this.current.clear(); this.names.clear(); this.emit('matchStart');
+        // rejoined the same server? only we "connect" then — bring the earlier list back if nobody else shows up
+        clearTimeout(this.rejoinTimer);
+        this.rejoinTimer = setTimeout(() => this.restoreIfRejoin(), 20000);
         // ask CS2 for the player list right away, then a few more times while everyone connects
         for (const ms of [4000, 10000, 20000, 35000, 60000]) setTimeout(() => this.pollNetcon(), ms);
       }
@@ -134,6 +146,15 @@ class LobbyScanner extends EventEmitter {
     for (const n of freshNames) this.names.add(n);
     if (listed.length) this.emit('statusSeen', { at: Date.now(), count: this.names.size + 1 });
     if (freshNames.length) this.emit('names', freshNames, [...this.names]);
+  }
+
+  /** After joining: if no one else connected and it's the server we just left, it was a rejoin. */
+  restoreIfRejoin() {
+    const p = this.prev;
+    if (!p || p.server !== this.server || this.names.size || !p.names.length) return;
+    for (const n of p.names) this.names.add(n);
+    this.emit('names', [...p.names], [...this.names]);
+    this.emit('statusSeen', { at: Date.now(), count: this.names.size + 1 });
   }
 
   tail() {

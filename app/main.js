@@ -109,6 +109,19 @@ async function liveCheck() {
       fresh.map((b) => `${b.name} — ${b.category} (${b.level === 'confirmed' ? 'confirmed by SteamID' : 'very likely: same name and playing CS2 now'})`).join('\n'), createWindow, { prematch: true });
   } catch (e) { send('log', 'Live check failed: ' + e.message); }
 }
+// Squad plan: CheaterFlag members you're queued/playing with, their stats (overall + on this map) for role suggestions
+let squadBusy = false;
+async function refreshSquad() {
+  if (squadBusy || !api || !store.get('token')) return;
+  squadBusy = true;
+  try {
+    const r = await api.squad(lobbyState.names || [], lobbyState.map || null);
+    lobbyState.squad = r.squad || [];
+    lobbyState.squadMap = r.map || null;
+    send('lobby', lobbyState);
+  } catch (_) { /* try again later */ } finally { squadBusy = false; }
+}
+setInterval(refreshSquad, 2 * 60 * 1000);
 let liveTimer = null;
 function onGameState(next, prev) {
   send('game', next);
@@ -125,6 +138,7 @@ async function onLobbyNames(fresh, all) {
   lobbyState.names = all;
   send('lobby', lobbyState);
   liveCheck();
+  clearTimeout(onLobbyNames.t); onLobbyNames.t = setTimeout(refreshSquad, 5000);
 }
 
 // Flags waiting for your vote: reminded every 5 minutes, but never while a match is being played.
@@ -167,6 +181,8 @@ function startServices() {
   lobby.on('netcon', (on) => { lobbyState.netcon = on; send('lobby', lobbyState); });
   lobby.on('matchStart', () => { lobbyState.players = []; lobbyState.checks = {}; lobbyState.names = []; lobbyState.nameHits = {}; send('lobby', lobbyState); });
   lobby.on('names', onLobbyNames);
+  lobby.on('map', (m) => { lobbyState.map = m; send('lobby', lobbyState); refreshSquad(); });
+  lobby.on('matchEnd', () => { lobbyState.players = []; lobbyState.checks = {}; lobbyState.names = []; lobbyState.nameHits = {}; lobbyState.live = null; lobbyState.lastStatus = null; lobbyState.map = null; clearInterval(liveTimer); send('lobby', lobbyState); refreshSquad(); });
   lobby.on('statusSeen', (x) => { lobbyState.lastStatus = x; send('lobby', lobbyState); });
   lobby.on('players', onLobbyPlayers);
   lobby.start();
@@ -274,7 +290,8 @@ async function backfillStats() {
     for (const m of redo) { watcher.addAwards(m); watcher.shareStats(m); }
     if (redo.length) { store.set({ history: hist0 }); send('match', redo[0]); }
 
-    const todo = (store.get('history') || []).filter((m) => !m.statsV && !m.statsTried && m.results && m.results.length
+    const { STATS_VERSION } = require('./lib/matchWatcher');
+    const todo = (store.get('history') || []).filter((m) => (m.statsV || 0) < STATS_VERSION && m.statsTried !== STATS_VERSION && m.results && m.results.length
       && ((m.keptDemo && fs.existsSync(m.keptDemo)) || (m.demoUrl && Date.now() - (m.playedAt || m.at) < 5 * 86400000)));
     for (const item of todo) {
       while (watcher.busy) await new Promise((r) => setTimeout(r, 5000));
@@ -296,7 +313,7 @@ async function backfillStats() {
       } catch (e) {
         const hist = store.get('history') || [];
         const m = hist.find((x) => x.shareCode === item.shareCode && x.at === item.at);
-        if (m) { m.statsTried = true; store.set({ history: hist }); }
+        if (m) { m.statsTried = require('./lib/matchWatcher').STATS_VERSION; store.set({ history: hist }); }
       } finally {
         if (temp && demo) { try { fs.unlinkSync(demo); } catch (_) {} }
         watcher.busy = false;
@@ -622,6 +639,7 @@ app.whenReady().then(() => {
   startServices();
   setTimeout(startBackfill, 20000);
   setTimeout(backfillStats, 90000);
+  setTimeout(refreshSquad, 15000);
   setTimeout(syncHistoryStats, 3 * 60000);
   setInterval(syncHistoryStats, 12 * 3600000);
   setTimeout(remindReports, 30000);

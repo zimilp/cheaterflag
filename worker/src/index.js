@@ -195,7 +195,7 @@ function cleanStats(raw) {
   const clean = {};
   for (const [k, v] of Object.entries(raw || {})) {
     if (k === 'awards') clean.awards = (Array.isArray(v) ? v : []).filter((a) => /^[a-z]{2,16}$/.test(a)).slice(0, 15);
-    else if (/^[A-Za-z0-9]{1,24}$/.test(k) && Number.isFinite(Number(v))) clean[k] = Math.max(0, Math.min(Number(v), 1e7));
+    else if (/^[A-Za-z0-9]{1,24}$/.test(k) && Number.isFinite(Number(v))) clean[k] = /[XY]$/.test(k) ? Math.max(-1e9, Math.min(Number(v), 1e9)) : Math.max(0, Math.min(Number(v), 1e7));   // map coordinates can be negative
   }
   return clean;
 }
@@ -273,6 +273,27 @@ async function faceitSync(env) {
       }
     }
   } catch (e) { /* out of budget or FACEIT busy: continue next run */ }
+}
+
+function aggregateStats(results) {
+    // three sums per member: all matches, matches with full per-round data (demo + FACEIT), demo-only matches
+  const by = new Map();
+  const add = (into, st) => { for (const [k, v] of Object.entries(st)) if (k !== 'awards' && k !== 'bestClutch' && typeof v === 'number') into[k] = (into[k] || 0) + v; };
+  for (const r of results) {
+    const st = JSON.parse(r.stats || '{}');
+    const a = by.get(r.steamid) || { steamid: r.steamid, name: r.name, matches: 0, demoMatches: 0, fullMatches: 0, faceitMatches: 0, historyMatches: 0, bestClutch: 0, awards: {}, all: {}, full: {}, demo: {} };
+    a.matches += 1;
+    add(a.all, st);
+    if (st.basic) a.historyMatches += 1;
+    else {
+      add(a.full, st); a.fullMatches += 1;
+      if (st.faceit) a.faceitMatches += 1;
+      else { add(a.demo, st); a.demoMatches += 1; a.bestClutch = Math.max(a.bestClutch, st.bestClutch || 0); }
+    }
+    for (const w of st.awards || []) { const key = w === 'baiter' ? 'popcorn' : w; a.awards[key] = (a.awards[key] || 0) + 1; }
+    by.set(r.steamid, a);
+  }
+  return [...by.values()];
 }
 
 async function route(req, env) {
@@ -355,6 +376,38 @@ async function route(req, env) {
       else if (nameMatch) out.nameOnly.push(entry);
     }
     return json(out);
+  }
+
+  // Members you're playing with right now (same Steam party / game server, or a name in your lobby) + their stats
+  if (p === '/squad' && req.method === 'POST') {
+    const names = new Set((body.names || []).map((n) => String(n).trim().toLowerCase()).filter(Boolean).slice(0, 20));
+    const { results: mems } = await env.DB.prepare("SELECT steamid, name FROM members WHERE status = 'approved'").all();
+    const live = new Map();
+    for (let i = 0; i < mems.length; i += 100) {
+      const r = await steamApi(env, 'ISteamUser/GetPlayerSummaries/v2/', { steamids: mems.slice(i, i + 100).map((x) => x.steamid).join(',') });
+      if (r.ok) for (const pl of ((await r.json()).response || {}).players || []) live.set(pl.steamid, pl);
+    }
+    const me = live.get(m.steamid) || {};
+    const val = (v) => (v && v !== '0' ? v : null);
+    const myServer = val(me.gameserversteamid), myLobby = val(me.lobbysteamid);
+    const squad = [];
+    for (const x of mems) {
+      const pl = live.get(x.steamid) || {};
+      const how = x.steamid === m.steamid ? 'you'
+        : myLobby && pl.lobbysteamid === myLobby ? 'party'
+        : myServer && pl.gameserversteamid === myServer ? 'server'
+        : names.has(String(pl.personaname || '').toLowerCase()) || names.has(String(x.name || '').toLowerCase()) ? 'name' : null;
+      if (how) squad.push({ steamid: x.steamid, name: pl.personaname || x.name, how });
+    }
+    const ids = squad.map((x) => x.steamid);
+    const ph = ids.map(() => '?').join(',');
+    const { results } = await env.DB.prepare(`SELECT s.steamid, s.stats, s.map, m.name FROM match_stats s JOIN members m ON m.steamid = s.steamid WHERE s.steamid IN (${ph})`).bind(...ids).all();
+    const mapKey = (x) => String(x || '').toLowerCase().replace(/^(de|cs)_/, '').replace(/\s+/g, '');
+    const want = mapKey(body.map);
+    const stats = new Map(aggregateStats(results).map((a) => [a.steamid, a]));
+    const onMap = new Map(want ? aggregateStats(results.filter((r) => mapKey(r.map) === want)).map((a) => [a.steamid, a]) : []);
+    const empty = (id) => ({ steamid: id, all: {}, full: {}, demo: {}, awards: {} });
+    return json({ map: want || null, squad: squad.map((x) => ({ ...(stats.get(x.steamid) || empty(x.steamid)), onMap: onMap.get(x.steamid) || null, name: x.name, how: x.how })) });
   }
 
   if (p === '/check-names' && req.method === 'POST') {
@@ -528,24 +581,7 @@ async function route(req, env) {
     const since = days > 0 ? Date.now() - days * 86400000 : 0;
     const { results } = await env.DB.prepare(`SELECT s.steamid, s.stats, m.name FROM match_stats s JOIN members m ON m.steamid = s.steamid
       WHERE m.status = 'approved' AND COALESCE(s.played_at, 0) >= ?`).bind(since).all();
-    // three sums per member: all matches, matches with full per-round data (demo + FACEIT), demo-only matches
-    const by = new Map();
-    const add = (into, st) => { for (const [k, v] of Object.entries(st)) if (k !== 'awards' && k !== 'bestClutch' && typeof v === 'number') into[k] = (into[k] || 0) + v; };
-    for (const r of results) {
-      const st = JSON.parse(r.stats || '{}');
-      const a = by.get(r.steamid) || { steamid: r.steamid, name: r.name, matches: 0, demoMatches: 0, fullMatches: 0, faceitMatches: 0, historyMatches: 0, bestClutch: 0, awards: {}, all: {}, full: {}, demo: {} };
-      a.matches += 1;
-      add(a.all, st);
-      if (st.basic) a.historyMatches += 1;
-      else {
-        add(a.full, st); a.fullMatches += 1;
-        if (st.faceit) a.faceitMatches += 1;
-        else { add(a.demo, st); a.demoMatches += 1; a.bestClutch = Math.max(a.bestClutch, st.bestClutch || 0); }
-      }
-      for (const w of st.awards || []) { const key = w === 'baiter' ? 'popcorn' : w; a.awards[key] = (a.awards[key] || 0) + 1; }
-      by.set(r.steamid, a);
-    }
-    return json({ players: [...by.values()] });
+    return json({ players: aggregateStats(results) });
   }
 
   const dm = p.match(/^\/demos\/(\d+)$/);

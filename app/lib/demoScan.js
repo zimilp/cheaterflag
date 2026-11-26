@@ -243,6 +243,37 @@ function finalScore(dp, demoPath) {
   } catch (_) { return []; }
 }
 
+/**
+ * Players who left before the end (abandon, disconnect) aren't in the final-tick team list.
+ * Put each one on the team whose players they shared a side with most often during the match.
+ */
+function addLeavers(teams, players, samples) {
+  if (teams.length !== 2) return teams;
+  const known = new Map();
+  teams.forEach((t, i) => t.players.forEach((id) => known.set(id, i)));
+  const byTick = new Map();
+  for (const r of samples || []) {
+    if (r.team_num !== 2 && r.team_num !== 3) continue;
+    if (!byTick.has(r.tick)) byTick.set(r.tick, []);
+    byTick.get(r.tick).push(r);
+  }
+  for (const p of players) {
+    const id = sid(p.steamid);
+    if (known.has(id)) continue;
+    const votes = [0, 0];
+    for (const rows of byTick.values()) {
+      const mine = rows.find((r) => sid(r.steamid) === id);
+      if (!mine) continue;
+      for (const r of rows) {
+        const t = known.get(sid(r.steamid));
+        if (t !== undefined && r.team_num === mine.team_num) votes[t] += 1;
+      }
+    }
+    if (votes[0] || votes[1]) teams[votes[0] >= votes[1] ? 0 : 1].players.push(id);
+  }
+  return teams;
+}
+
 /** Parse a .dem file and analyze it. Heavy: run it in a utility process. */
 function scanDemo(demoPath, T = THRESHOLDS) {
   const dp = require('@laihoe/demoparser2');
@@ -274,6 +305,7 @@ function scanDemo(demoPath, T = THRESHOLDS) {
     for (const r of results) if (stats.has(r.steamid)) r.stats = stats.get(r.steamid);
   } catch (_) {}
   const teams = finalScore(dp, demoPath);
+  addLeavers(teams, players, samples);
   for (const r of results) {
     const own = teams.find((t) => t.players.includes(r.steamid));
     const opp = teams.find((t) => t !== own);
@@ -388,4 +420,4 @@ function deepScan(demoPath, steamid, T = DEEP) {
 }
 
 const SCANNER_VERSION = 5;
-module.exports = { analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION };
+module.exports = { addLeavers, analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION };
