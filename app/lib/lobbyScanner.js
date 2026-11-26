@@ -56,14 +56,13 @@ function extractConnectedNames(text) {
   return names;
 }
 
-/** True when a console line says a new match/map is loading (reset the lobby list).
- *  Not "loaded spawngroup": that also appears inside every `status` reply. */
-function isMatchStart(raw) {
-  const line = stripPrefix(raw);
-  return /ChangeGameUIState: \S+ -> CSGO_GAME_UI_STATE_LOADINGSCREEN/.test(line)
-    || /Host activate: Remote Connect/.test(line)
-    || (/^Map: "/.test(line) && !/<empty>/.test(line));
+/** The game server a console line says we're joining ("Host activate: Remote Connect (<server>)"), else null.
+ *  This is the start of a match. Rejoining the SAME server (crash, disconnect) is not a new match. */
+function matchServer(raw) {
+  const m = stripPrefix(raw).match(/Host activate: Remote Connect \((.+)\)/);
+  return m ? m[1] : null;
 }
+const isMatchStart = (raw) => matchServer(raw) != null;
 
 const DEFAULT_CS2_DIRS = [
   'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Counter-Strike Global Offensive\\game\\csgo',
@@ -98,9 +97,13 @@ class LobbyScanner extends EventEmitter {
         const lines = buf.toString('utf8').split(/\r?\n/);
         let i = lines.length - 1;
         while (i >= 0 && !isMatchStart(lines[i])) i--;
-        const rest = lines.slice(i + 1);
-        const leftMatch = rest.some((l) => /CSGO_GAME_UI_STATE_\w+ -> CSGO_GAME_UI_STATE_MAINMENU|Map: "<empty>"/.test(l));
-        if (i >= 0 && !leftMatch) setTimeout(() => this.feed(rest.join('\n')), 0);
+        const leftAfter = lines.slice(i + 1);
+        if (i >= 0) {   // rejoined the same server? start from the first join, when everyone else connected
+          const server = matchServer(lines[i]);
+          for (let j = i - 1; j >= 0; j--) { const sv = matchServer(lines[j]); if (sv && sv !== server) break; if (sv === server) i = j; }
+        }
+        const rest = lines.slice(i);
+        if (i >= 0 && !leftAfter.some((l) => /CSGO_GAME_UI_STATE_\w+ -> CSGO_GAME_UI_STATE_MAINMENU/.test(l) && !/LOADINGSCREEN/.test(l)) ) setTimeout(() => this.feed(rest.join('\n')), 0);
       } catch (_) {}
     }
     let n = 0;
@@ -113,7 +116,9 @@ class LobbyScanner extends EventEmitter {
   feed(text) {
     const fresh = [];
     for (const line of text.split(/\r?\n/)) {
-      if (isMatchStart(line)) {
+      const server = matchServer(line);
+      if (server && server !== this.server) {
+        this.server = server;
         this.current.clear(); this.names.clear(); this.emit('matchStart');
         // ask CS2 for the player list right away, then a few more times while everyone connects
         for (const ms of [4000, 10000, 20000, 35000, 60000]) setTimeout(() => this.pollNetcon(), ms);

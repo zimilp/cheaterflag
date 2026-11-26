@@ -23,8 +23,6 @@ test('status names with CS2 prefixes', () => {
 
 test('status replies do not look like a new match', () => {
   for (const l of LOG.split('\n')) assert.equal(isMatchStart(l), false, l);
-  assert.equal(isMatchStart('11/26 08:47:38 ChangeGameUIState: CSGO_GAME_UI_STATE_MAINMENU -> CSGO_GAME_UI_STATE_LOADINGSCREEN'), true);
-  assert.equal(isMatchStart('11/26 08:47:39 [Client] Map: "de_mirage"'), true);
   assert.equal(isMatchStart('11/26 09:23:00 [Client] Map: "<empty>"'), false);
   assert.equal(isMatchStart('11/26 09:42:16 [HostStateManager] Host activate: Remote Connect (=[A:1:4118346762:52697])'), true);
 });
@@ -37,4 +35,24 @@ test('names from "connected" lines in console.log (real CS2 output)', () => {
 11/26 12:01:12 Client:  Connected [loopback:1] [last packet 0.014 sec ago]
 11/26 12:01:12 [Networking] server @ =[A:1:1:2]:  NetChan Setting Timeout to 30.00 seconds`;
   assert.deepEqual(extractConnectedNames(log), ['cfab', 'The Dapper Frog', '1/2 Gallon de Chicha']);
+});
+
+test('rejoining the same server keeps the player list', () => {
+  const { LobbyScanner } = require('../lib/lobbyScanner');
+  const l = new LobbyScanner({ ownName: 'cfab' });
+  let last = [];
+  l.on('names', (_f, all) => { last = all; });
+  l.pollNetcon = () => {};
+  l.feed(`11/26 12:09:28 [HostStateManager] Host activate: Remote Connect (=[A:1:2537009174:52699])
+11/26 12:09:29 cfab connected
+11/26 12:09:29 Xinhai connected
+11/26 12:09:30 freeman connected`);
+  l.feed(`11/26 12:23:12 [HostStateManager] Host activate: Idle (levelload)
+11/26 12:23:43 [HostStateManager] Host activate: Remote Connect (=[A:1:2537009174:52699])
+11/26 12:23:44 cfab connected`);
+  assert.deepEqual(last, ['Xinhai', 'freeman']);
+  assert.equal(l.names.size, 2);
+  l.feed(`11/26 13:00:00 [HostStateManager] Host activate: Remote Connect (=[A:1:999:1])
+11/26 13:00:01 Rook connected`);
+  assert.deepEqual(last, ['Rook']);
 });
