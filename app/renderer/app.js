@@ -95,7 +95,7 @@ function renderSquad(l) {
 function renderLobby(l) {
   const names = l.names || [];
   const conf = (l.live && l.live.confirmed) || [];
-  $('#lobbyStatus').textContent = (l.netcon ? 'Connected to CS2.' : names.length ? "Reading players from CS2's console log." : 'Waiting for CS2… (players appear as soon as a match loads).')
+  $('#lobbyStatus').textContent = (names.length ? "Reading players from CS2's console log." : 'Waiting for a match… players appear as they join.') + ((l.lastStatus && l.lastStatus.count >= 8) ? '' : ' CS2 only logs players who join after you — hold TAB once in the match to list everyone (turn on "Full lobby list" in Settings).')
     + (l.lastStatus ? ` Last player list: ${new Date(l.lastStatus.at).toLocaleTimeString()} (${l.lastStatus.count} player${l.lastStatus.count === 1 ? '' : 's'}).` : '')
     + (l.live ? (l.live.serverKnown ? ' Steam shows your game server, so blacklisted players are confirmed by SteamID.' : ' Steam isn\'t sharing your game server right now, so matches are by name + "playing CS2 now".') : '')
     + (conf.filter((b) => !names.some((n) => n.toLowerCase() === (b.name || '').toLowerCase())).length ? ' Also confirmed in your server: ' + conf.map((b) => b.name).join(', ') + '.' : '');
@@ -154,6 +154,45 @@ function watchButtons(moments, opts) {
     } }, `▶ Round ${mo.round}: ${mo.what}`)));
 }
 
+
+// ---------- extras under each match: how you died, highlights
+const isMember = (c) => !!c && (c.reasons || []).includes('CheaterFlag member');
+function smurfOf(r, c) {
+  if (!c || isMember(c) || !r.stats || (r.stats.rounds || 0) < 10) return null;
+  const young = c.ageDays != null && c.ageDays < 365, fewHours = c.cs2Hours != null && c.cs2Hours < 300;
+  if (!young && !fewHours) return null;
+  const s = r.stats, adr = s.damage / s.rounds, kd = s.kills / Math.max(1, s.deaths);
+  if (!(adr >= 95 || (kd >= 1.8 && s.kills >= 18))) return null;
+  return `${young ? `Account ${c.ageDays} days old` : `Only ${c.cs2Hours} CS2 hours`} but played like a veteran this match (ADR ${Math.round(adr)}, K/D ${kd.toFixed(2)}). Smurfing isn't cheating — this is just a heads-up.`;
+}
+function matchExtras(m, key, checks) {
+  const out = [];
+  const opts = { demoPath: m.keptDemo, demoUrl: m.demoUrl, key: m.shareCode };
+  const mine = m.results.find((r) => r.steamid === me?.steamid);
+  if (mine && mine.deathsTotal) {
+    const odd = mine.oddDeaths || [];
+    out.push(el('div', { class: 'extra' },
+      el('h4', {}, `How you died · ${odd.length} of ${mine.deathsTotal} deaths looked off`),
+      odd.length ? el('div', { class: 'deaths' }, odd.map((d) => {
+        const killer = m.results.find((r) => r.steamid === d.killer);
+        return el('div', { class: 'death' },
+          el('span', {}, `Round ${d.round} · `, el('b', {}, d.killerName || 'someone'), ` (${d.weapon.replace(/^weapon_/, '')}) ${d.reasons.join(', ')}`),
+          watchButtons([{ tick: d.tick, round: d.round, what: 'how it happened' }], { ...opts, steamid: d.killer }),
+          killer ? scrutinizeButton(killer, key, { tier: 'limited', reasons: [] }) : null);
+      })) : el('p', { class: 'muted small' }, 'Every kill on you looked normal: seen first, no snaps through walls, no smoke or flashed kills.')));
+  }
+  // highlights: members' aces, 4Ks and 1v2+ clutches
+  const hl = m.results.filter((r) => (r.steamid === me?.steamid || isMember(checks[r.steamid])) && (r.highlights || []).length);
+  if (hl.length) {
+    out.push(el('div', { class: 'extra' }, el('h4', {}, 'Highlights'),
+      el('div', { class: 'row watch' }, hl.flatMap((r) => r.highlights.map((h) => el('button', { onclick: () => {
+        showWatchBar(true); $('#watchMsg').textContent = 'Opening CS2…';
+        cf.watchDemo({ ...opts, steamid: r.steamid, tick: h.tick }).catch((e) => { $('#watchMsg').textContent = e.message; });
+      } }, `▶ ${r.name}: ${h.what} (round ${h.round})`))))));
+  }
+  return out;
+}
+
 // ---------- matches + report helper
 async function refreshHistory() { try { const st = await cf.state(); state.history = st.history; } catch (_) {} renderMatches(); }
 const matchOpen = new Map();
@@ -209,6 +248,7 @@ function renderMatches() {
       const game = r.flagged || r.deep?.flagged ? el('span', { class: 'badge rejected mini' }, r.flagged ? r.category : r.deep.category)
         : r.signals.length ? el('span', { class: 'badge limited mini' }, 'Weak signals') : el('span', { class: 'badge approved mini' }, 'Clean');
       game.title = 'Gameplay: ' + scanWhy;
+      const smurf = smurfOf(r, c);
       const deep = r.deep;
       const worst = r.flagged || (deep && deep.flagged) || (c && c.tier === 'rejected') ? 'bad' : (r.signals.length || (c && c.tier === 'limited')) ? 'warn' : 'ok';
       // one line for clean players; a short reason line only when something isn't clean
@@ -221,7 +261,7 @@ function renderMatches() {
           el('a', { href: '#', class: 'pname', title: 'Open Steam profile', onclick: (ev) => { ev.preventDefault(); cf.openProfile(r.steamid); } }, r.name),
           r.steamid === me?.steamid ? el('span', { class: 'you' }, 'you') : null,
           (r.awards || []).some((k) => AWARD_LABEL[k]) ? el('span', { class: 'pawards', title: r.awards.filter((k) => AWARD_LABEL[k]).map((k) => AWARD_LABEL[k]).join(' · ') }, r.awards.filter((k) => AWARD_LABEL[k]).map((k) => AWARD_LABEL[k].split(' ')[0]).join('')) : null,
-          el('span', { class: 'pbadges' }, el('span', { class: 'plabel' }, 'Acct'), acct, el('span', { class: 'plabel' }, 'Play'), game),
+          el('span', { class: 'pbadges' }, smurf ? el('span', { class: 'badge smurf mini', title: smurf }, 'Possible smurf') : null, el('span', { class: 'plabel' }, 'Acct'), acct, el('span', { class: 'plabel' }, 'Play'), game),
           el('span', { class: 'pk' }, el('b', {}, r.kills), ' K')),
         el('div', { class: 'pnote' + (notes.length ? '' : ' clean'), title: notes.length ? notes.join(' · ') : acctWhy },
           el('span', { class: 'ptext' }, notes.length ? notes.join(' · ') : acctWhy),
@@ -253,6 +293,7 @@ function renderMatches() {
       }
       body.append(grid);
       if (rest.length) body.append(column('Other players', null, rest, 'rest'));
+      body.append(...matchExtras(m, key, checks));
     } else {
       body.append(el('div', { class: 'teams single' }, column('Players', null, [...m.results].sort((a, b) => b.kills - a.kills), 'mine')));
     }
@@ -296,10 +337,15 @@ const STAT_COLS = [
   { key: 'awp', src: 'full', label: 'AWP %', rate: (p) => pct(z(p.full, 'awpKills'), z(p.full, 'kills')), total: (p) => z(p.full, 'awpKills'), totalLabel: 'AWP kills', tip: 'Share of kills with the AWP' },
   { key: 'wallbang', src: 'demo', label: 'Wallbang %', rate: (p) => pct(z(p.demo, 'wallbangs'), z(p.demo, 'kills')), total: (p) => z(p.demo, 'wallbangs'), totalLabel: 'Wallbangs' },
   { key: 'save', src: 'demo', label: 'Save %', rate: (p) => pct(z(p.demo, 'saves'), z(p.demo, 'rounds')), total: (p) => z(p.demo, 'saves'), totalLabel: 'Saves', tip: 'Rounds where they survived a lost round' },
+  { key: 'pistol', src: 'demo', label: 'Pistol win %', rate: (p) => pct(z(p.demo, 'pistolWins'), z(p.demo, 'pistolRounds')), total: (p) => z(p.demo, 'pistolWins'), totalLabel: 'Pistol wins' },
+  { key: 'eco', src: 'demo', label: 'Eco win %', rate: (p) => pct(z(p.demo, 'ecoWins'), z(p.demo, 'ecoRounds')), total: (p) => z(p.demo, 'ecoRounds'), totalLabel: 'Eco rounds', tip: 'Rounds won when they had under $1,500 of gear' },
+  { key: 'force', src: 'demo', label: 'Force win %', rate: (p) => pct(z(p.demo, 'forceWins'), z(p.demo, 'forceRounds')), total: (p) => z(p.demo, 'forceRounds'), totalLabel: 'Force buys', tip: 'Rounds won with $1,500–3,800 of gear' },
+  { key: 'fullbuy', src: 'demo', label: 'Full-buy win %', rate: (p) => pct(z(p.demo, 'fullWins'), z(p.demo, 'fullRounds')), total: (p) => z(p.demo, 'fullRounds'), totalLabel: 'Full buys', tip: 'Rounds won with $3,800+ of gear' },
+  { key: 'perkill', src: 'demo', label: '$ per kill', rate: (p) => Math.round(z(p.demo, 'moneySpent') / Math.max(1, z(p.demo, 'kills'))), total: (p) => z(p.demo, 'moneySpent'), totalLabel: '$ spent', tip: 'Money spent for each kill — lower is more efficient', fmt: (v) => '$' + Number(v).toLocaleString() },
   { key: 'knife', src: 'full', label: 'Knife kills', rate: (p) => z(p.full, 'knifeKills') },
   { key: 'km', src: 'demo', label: 'Km / match', rate: (p) => per(z(p.demo, 'distance') * 0.0254 / 1000, p.demoMatches), total: (p) => Math.round(z(p.demo, 'distance') * 0.0254 / 100) / 10, totalLabel: 'Km run', tip: '1 unit ≈ 1 inch' },
 ];
-const PCT_KEYS = new Set(['win', 'hs', 'mvp', 'open', 'trade', 'bomb', 'multi', 'awp', 'wallbang', 'save']);
+const PCT_KEYS = new Set(['pistol', 'eco', 'force', 'fullbuy', 'win', 'hs', 'mvp', 'open', 'trade', 'bomb', 'multi', 'awp', 'wallbang', 'save']);
 function topAward(p) {
   let k = null, n = 0;
   for (const [a, c] of Object.entries(p.awards || {})) if (AWARD_LABEL[a] && c > n) { k = a; n = c; }
@@ -333,8 +379,29 @@ async function loadStats() {
   try {
     statRows = (await cf.stats(Number($('#statDays').value))).players || [];
     giveOverallAwards(statRows);
+    cf.stats(7).then((w) => renderRecap(w.players || [])).catch(() => {});
     renderStats();
   } catch (e) { box.textContent = e.message; }
+}
+// weekly recap: who led the squad in the last 7 days
+function renderRecap(rows) {
+  const box = $('#recap');
+  const lead = (label, fn, fmt, min = 1) => {
+    const best = rows.map((p) => ({ p, v: fn(p) })).filter((x) => x.v >= min).sort((a, b) => b.v - a.v)[0];
+    return best ? el('div', { class: 'lead' }, el('span', { class: 'muted' }, label), el('b', {}, best.p.name), el('span', {}, fmt(best.v))) : null;
+  };
+  const items = [
+    lead('Most wins', (p) => z(p.all, 'wins'), (v) => `${v} wins`),
+    lead('Best K/D', (p) => (z(p.all, 'kills') >= 30 ? z(p.all, 'kills') / Math.max(1, z(p.all, 'deaths')) : 0), (v) => v.toFixed(2), 0.01),
+    lead('Highest ADR', (p) => (z(p.full, 'rounds') >= 30 ? z(p.full, 'damage') / z(p.full, 'rounds') : 0), (v) => Math.round(v) + ' ADR', 0.01),
+    lead('Clutch king', (p) => z(p.demo, 'clutchWins'), (v) => `${v} clutches`),
+    lead('Aces', (p) => z(p.full, 'aces'), (v) => `${v} ace${v === 1 ? '' : 's'}`),
+    lead('Opening kills', (p) => z(p.demo, 'entryKills'), (v) => `${v} entries`),
+    lead('Most awards', (p) => Object.entries(p.awards || {}).filter(([k]) => AWARD_LABEL[k]).reduce((a, [, n]) => a + n, 0), (v) => `${v} awards`),
+  ].filter(Boolean);
+  if (!items.length) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  box.replaceChildren(el('h3', {}, 'This week'), el('div', { class: 'leads' }, items));
 }
 function renderStats() {
   const box = $('#statTable');
@@ -378,7 +445,7 @@ function scrutinizeButton(r, key, c) {
     return b;
   }
   const busy = scrutinyBusy.has(job);
-  return el('button', { class: 'small scrut', disabled: busy, title: 'Run extra checks on this player (stricter rules + pre-aim, aim-lock, smoke, headshot and flash checks). Anything suspicious goes to Review.',
+  return el('button', { class: 'small scrut', disabled: busy, title: 'Run extra checks on this player (stricter rules + pre-aim, aim-lock, smoke, headshot, flash and bomb-read checks). Anything suspicious goes to Review.',
     onclick: (ev) => {
       ev.stopPropagation();
       scrutinyBusy.add(job); ev.target.disabled = true; ev.target.textContent = 'Scrutinizing…';
@@ -471,6 +538,7 @@ $('#ovForm').addEventListener('submit', (e) => {
 $('#btnSignOut').addEventListener('click', () => cf.signOut().then(init));
 $('#pLogin').addEventListener('change', (e) => cf.setPrefs({ openAtLogin: e.target.checked }));
 $('#pNotify').addEventListener('change', (e) => cf.setPrefs({ notifications: e.target.checked }));
+$('#pTab').addEventListener('change', (e) => cf.setPrefs({ tabStatus: e.target.checked }).then(() => log(e.target.checked ? 'TAB player list on — restart CS2 once, then hold TAB in a match.' : 'TAB player list off — restart CS2 to restore your normal TAB.')).catch(fail));
 $('#pKeep').addEventListener('change', (e) => cf.setPrefs({ keepCleanDays: Number(e.target.value) }).then(refreshDemoUse));
 $('#btnOpenDemos').addEventListener('click', () => cf.openDemos());
 function refreshDemoUse() { cf.demoUsage().then((u) => { $('#demoUse').textContent = `${u.count} demo${u.count === 1 ? '' : 's'} stored · ${(u.bytes / 1073741824).toFixed(1)} GB`; }).catch(() => {}); }
@@ -573,6 +641,7 @@ async function init() {
   const done = await refreshSetup().catch(() => false);
   const pr = await cf.prefs(); $('#pLogin').checked = pr.openAtLogin; $('#pNotify').checked = pr.notifications;
   $('#pKeep').value = String(pr.keepCleanDays); refreshDemoUse();
+  $('#pTab').checked = !!pr.tabStatus;
   $('#steamWho').textContent = me ? `Signed in as ${me.name || me.steamid}.` : 'Not signed in.';
   showTab(done ? 'matches' : 'setup');
 }

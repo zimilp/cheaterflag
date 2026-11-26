@@ -8,6 +8,7 @@ const steamWindow = require('./lib/steamWindow');
 const { LobbyScanner } = require('./lib/lobbyScanner');
 const { MatchWatcher } = require('./lib/matchWatcher');
 const steamConfig = require('./lib/steamConfig');
+const tabStatus = require('./lib/tabStatus');
 const retention = require('./lib/retention');
 const { GameState, installCfg } = require('./lib/gsi');
 const { SCANNER_VERSION } = require('./lib/demoScan');
@@ -210,6 +211,7 @@ function startServices() {
 function autoConfigure() {
   try {
     if (!store.get('cs2Dir')) { const d = steamConfig.findCs2Dir(); if (d) store.set({ cs2Dir: d }); }
+    try { tabStatus.apply(store.get('cs2Dir'), store.get('tabStatus') === true, false); } catch (_) {}
     const id = store.get('steamid');
     if (id && !steamConfig.launchOptionsStatus(id).ok) steamConfig.applyLaunchOptions(id); // no-op while Steam runs
     if (gsi && installCfg(store.get('cs2Dir'), gsi.token)) send('log', 'Game-state link installed — it starts working next time CS2 opens.');
@@ -304,7 +306,8 @@ async function backfillStats() {
         const hist = store.get('history') || [];
         const m = hist.find((x) => (x.shareCode || String(x.at)) === key);
         if (m) {
-          for (const r of m.results) if (stats[r.steamid]) r.stats = stats[r.steamid];
+          const got = stats.stats || stats;   // { stats, highlights } (older builds: just stats)
+          for (const r of m.results) if (got[r.steamid]) { r.stats = got[r.steamid]; r.highlights = (stats.highlights || {})[r.steamid] || []; }
           watcher.addAwards(m);
           store.set({ history: hist });
           watcher.shareStats(m);
@@ -490,7 +493,7 @@ function registerIpc() {
     return r.member;
   });
   h('prefs', async () => ({ openAtLogin: store.get('openAtLogin') !== false, notifications: store.get('notifications') !== false,
-    keepCleanDays: store.get('keepCleanDays') == null ? 7 : Number(store.get('keepCleanDays')) }));
+    keepCleanDays: store.get('keepCleanDays') == null ? 7 : Number(store.get('keepCleanDays')), tabStatus: store.get('tabStatus') === true }));
   h('demoUsage', async () => watcher ? retention.usage([watcher.cleanDir, watcher.flaggedDir]) : { bytes: 0, count: 0 });
   h('openDemos', async () => { if (watcher) { fs.mkdirSync(watcher.demoDir, { recursive: true }); shell.openPath(watcher.demoDir); } });
   h('setPrefs', async (p) => {
@@ -498,6 +501,11 @@ function registerIpc() {
     if (typeof p.openAtLogin === 'boolean') { patch.openAtLogin = p.openAtLogin; if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: p.openAtLogin, args: ['--hidden'] }); }
     if (typeof p.notifications === 'boolean') patch.notifications = p.notifications;
     if ([0, 3, 7, 14].includes(Number(p.keepCleanDays))) patch.keepCleanDays = Number(p.keepCleanDays);
+    if (typeof p.tabStatus === 'boolean') {
+      const was = store.get('tabStatus') === true;
+      patch.tabStatus = p.tabStatus;
+      try { tabStatus.apply(store.get('cs2Dir') || steamConfig.findCs2Dir(), p.tabStatus, was); } catch (e) { throw new Error("Couldn't write CS2's config: " + e.message); }
+    }
     store.set(patch); return true;
   });
   h('updateStatus', async () => updateStatus);

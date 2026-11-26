@@ -8,9 +8,9 @@ Set-Location $PSScriptRoot
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Set-EnvValue($path, $key, $value) {
-  $lines = @(Get-Content $path)
+  $lines = @([IO.File]::ReadAllLines((Resolve-Path $path), [Text.Encoding]::UTF8))   # UTF-8 in and out (PS 5.1 Get-Content reads ANSI and garbles)
   if ($lines -match "^$key=") { $lines = $lines -replace "^$key=.*", "$key=$value" } else { $lines += "$key=$value" }
-  [IO.File]::WriteAllText((Resolve-Path $path), (($lines -join "`r`n") + "`r`n"))
+  [IO.File]::WriteAllText((Resolve-Path $path), (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding $false))
 }
 
 $url = 'https://github.com/settings/personal-access-tokens/new?name=CheaterFlag+bot+wake-up&description=Lets+the+CheaterFlag+service+start+the+demo+bot&target_name=zimilp&expires_in=365&actions=write'

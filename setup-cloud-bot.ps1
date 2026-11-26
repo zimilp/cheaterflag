@@ -23,7 +23,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $tokenFile = 'bot\data\refresh-token.txt'
 if (-not (Test-Path $tokenFile)) { throw "No saved bot login found. Run 'npm run bot' once and sign the bot in first." }
-$botSecret = (Get-Content secrets.env | Where-Object { $_ -match '^BOT_SECRET=' }) -replace '^BOT_SECRET=', ''
+$botSecret = ([IO.File]::ReadAllLines((Resolve-Path 'secrets.env'), [Text.Encoding]::UTF8) | Where-Object { $_ -match '^BOT_SECRET=' }) -replace '^BOT_SECRET=', ''
 if (-not $botSecret) { throw 'BOT_SECRET missing from secrets.env' }
 
 Write-Host "== Storing secrets on GitHub (values are not shown) ==" -ForegroundColor Cyan

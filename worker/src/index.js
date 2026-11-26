@@ -165,7 +165,10 @@ async function checkPlayers(env, steamids, opts) {
     const { tier, reasons } = members.has(id) && !(opts && opts.rawForMembers)
       ? { tier: 'approved', reasons: ['CheaterFlag member'] }
       : computeTier({ ...p, blacklisted: blm.get(id), override: ovm.get(id) });
-    return { steamid: id, name: p.summary?.personaname || null, avatar: p.summary?.avatar || null, tier, reasons, blacklisted: !!blm.get(id) };
+    // plain facts for the app's smurf check (account age in days, CS2 hours; null = hidden)
+    const ageDays = p.summary && p.summary.timecreated ? Math.floor((now() - p.summary.timecreated) / 86400) : null;
+    const cs2Hours = p.cs2Minutes == null ? null : Math.round(p.cs2Minutes / 60);
+    return { steamid: id, name: p.summary?.personaname || null, avatar: p.summary?.avatar || null, tier, reasons, blacklisted: !!blm.get(id), ageDays, cs2Hours };
   });
 }
 

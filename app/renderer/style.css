@@ -148,3 +148,12 @@ table.stats tbody tr:hover td { background:#1a1f2a; }
 .role-awp { background:#3a1515; color:#ff8a8a; } .role-entry { background:#3a2410; color:#ffb067; } .role-lurk { background:#2a1d3a; color:#c9a3ff; }
 .role-support { background:#10303a; color:#7fd6ff; } .role-anchorA, .role-anchorB { background:#3a3210; color:#ffd166; } .role-rotator { background:#132a3a; color:#8cc4ff; } .role-rifler { background:#222733; color:#cfd6e4; }
 .small { font-size:12px; }
+
+.badge.smurf { background:#2a1d3a; color:#c9a3ff; border-color:#4b3570; }
+.extra { margin-top:12px; padding-top:10px; border-top:1px solid var(--line); }
+.extra h4 { margin:0 0 8px; }
+.deaths .death { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:4px 0; }
+.deaths .death .row.watch { margin:0; }
+.recap .leads { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:10px; }
+.recap .lead { display:flex; flex-direction:column; gap:2px; background:#161a22; border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+.recap .lead .muted { font-size:12px; }

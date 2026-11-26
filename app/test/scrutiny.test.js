@@ -72,3 +72,107 @@ test('players who left early are put on the right team', () => {
   assert.deepEqual(teams[0].players, ['a', 'b', 'quitter']);
   assert.ok(!teams[1].players.includes('quitter'));
 });
+
+test('bomb reads: rotating to the plant site with no information', () => {
+  const { bombReads, DEEP } = require('../lib/demoScan');
+  const mk = (seenNearSite, planterSeenFar) => {
+    const samples = [], plants = [], roundStarts = [];
+    for (let r = 0; r < 4; r++) {
+      const F = r * 10000 + 1000, P = F + 40 * 64;
+      roundStarts.push(F);
+      plants.push({ tick: P, user_steamid: 't1' });
+      for (let t = F; t <= P; t += 4) {
+        const k = (t - F) / (P - F);
+        samples.push({ tick: t, steamid: 'me', team_num: 3, is_alive: true, X: 3000 - 2500 * k, Y: 0, approximate_spotted_by: [] });
+        // planter: walks to the site at (0,0) from far away; optionally seen far away (a "fake") or near the site early
+        const far = { X: -3000 + 3000 * k, Y: 0 };
+        const spotted = (seenNearSite && k > 0.1) || (planterSeenFar && k < 0.2) ? ['me'] : [];
+        const pos = seenNearSite ? { X: 500, Y: 0 } : far;
+        samples.push({ tick: t, steamid: 't1', team_num: 2, is_alive: true, ...pos, approximate_spotted_by: spotted });
+      }
+    }
+    return { samples, plants, roundStarts, beginPlants: [] };
+  };
+  const cheat = bombReads(mk(false, true), 'me', DEEP);
+  assert.equal(cheat.away, 4);
+  assert.equal(cheat.reads, 4);
+  assert.equal(cheat.fakeReads, 4);
+  const legit = bombReads(mk(true, false), 'me', DEEP);   // T seen at the site early -> rotating is just reacting
+  assert.equal(legit.reads, 0);
+});
+
+test('bomb reads: someone who goes to the same site every round is not flagged', () => {
+  const { bombReads, DEEP } = require('../lib/demoScan');
+  const A = { X: 0, Y: 0 }, B = { X: 0, Y: 4000 };
+  const samples = [], plants = [], roundStarts = [];
+  for (let r = 0; r < 10; r++) {
+    const F = r * 10000 + 1000, P = F + 45 * 64, site = r % 2 ? A : B;
+    roundStarts.push(F); plants.push({ tick: P, user_steamid: 't1' });
+    for (let t = F; t <= P; t += 4) {
+      const k = Math.min(1, (t - F) / (35 * 64));
+      samples.push({ tick: t, steamid: 'me', team_num: 3, is_alive: true, X: 3500 - 3500 * k, Y: 2000 + 2000 * k, approximate_spotted_by: [] });  // always walks to B
+      samples.push({ tick: t, steamid: 't1', team_num: 2, is_alive: true, X: site.X + 3000 * (1 - (t - F) / (P - F)), Y: site.Y - 3000, approximate_spotted_by: [] });
+    }
+    samples.push({ tick: P, steamid: 't1', team_num: 2, is_alive: true, X: site.X, Y: site.Y, approximate_spotted_by: [] });
+  }
+  const res = bombReads({ samples, plants, roundStarts, beginPlants: [] }, 'me', DEEP);
+  assert.ok(res.wrong >= 3, 'went to B when the bomb was at A');
+  const flagged = res.reads >= DEEP.bombReads && res.reads / res.away >= DEEP.bombReadRate && res.unusual >= DEEP.bombUnusual && res.reads >= DEEP.bombWrongRatio * res.wrong;
+  assert.equal(flagged, false);
+});
+
+test('mechanics: triggerbot, no-recoil, spinbot and bhop', () => {
+  const { mechanicsChecks, DEEP } = require('../lib/demoScan');
+  const deaths = [], killWindows = [], fires = [], fireRows = [], samples = [], jumps = [];
+  // 6 kills: crosshair sweeps onto the enemy at tick K-10 and fires that same tick
+  for (let k = 0; k < 6; k++) {
+    const K = 2000 + k * 1000, vid = 'v' + k;
+    deaths.push({ tick: K, attacker_steamid: 'me', user_steamid: vid, weapon: 'ak47' });
+    fires.push({ tick: K - 10, user_steamid: 'me', weapon: 'ak47' });
+    for (let t = K - 96; t <= K; t++) {
+      const yaw = t < K - 10 ? 20 - (t - (K - 30)) * 1.0 : 0;      // sweeping 1°/tick, lands on 0° at K-10
+      killWindows.push({ tick: t, steamid: 'me', X: 0, Y: 0, Z: 0, pitch: 0, yaw: Math.max(yaw, 0) }, { tick: t, steamid: vid, X: 1000, Y: 0, Z: 8 });
+    }
+  }
+  // 5 sprays of 8 shots with perfectly cancelled recoil
+  for (let sp = 0; sp < 5; sp++) for (let i = 0; i < 8; i++) {
+    const t = 20000 + sp * 500 + i * 6;
+    fires.push({ tick: t, user_steamid: 'me', weapon: 'ak47' });
+    fireRows.push({ tick: t, steamid: 'me', pitch: 5 - 2 * (-0.4 * i), yaw: 0, aim_punch_angle: [-0.4 * i, 0, 0] });
+  }
+  // a spin: 120°/tick for 40 ticks; and 4 chains of 7 hops 40 ticks apart at 300 u/s
+  for (let t = 30000; t < 30040; t += 4) samples.push({ tick: t, steamid: 'me', is_alive: true, pitch: 0, yaw: (t * 25) % 360, X: 0, Y: 0 });
+  for (let c = 0; c < 4; c++) for (let j = 0; j < 7; j++) {
+    const t = 40000 + c * 2000 + j * 40;
+    jumps.push({ tick: t, user_steamid: 'me' });
+    samples.push({ tick: t - 4, steamid: 'me', is_alive: true, pitch: 0, yaw: 0, X: (t - 4) * 300 / 64, Y: 0 }, { tick: t, steamid: 'me', is_alive: true, pitch: 0, yaw: 0, X: t * 300 / 64, Y: 0 });
+  }
+  const r = mechanicsChecks({ deaths, killWindows, fires, fireRows, samples, jumps, roundStarts: [0] }, 'me', DEEP);
+  assert.equal(r.trigEligible, 6); assert.equal(r.trig, 6);
+  assert.equal(r.sprays, 5); assert.equal(r.stillSprays, 5);
+  assert.equal(r.spinRuns, 1);
+  assert.equal(r.bhopChains, 4);
+});
+
+test('mechanics: normal play is not flagged', () => {
+  const { mechanicsChecks } = require('../lib/demoScan');
+  const fires = [], fireRows = [], samples = [];
+  for (let sp = 0; sp < 5; sp++) for (let i = 0; i < 8; i++) {
+    const t = 20000 + sp * 500 + i * 6;
+    fires.push({ tick: t, user_steamid: 'me', weapon: 'ak47' });
+    fireRows.push({ tick: t, steamid: 'me', pitch: 5 + 0.8 * i + Math.sin(i * 3) * 0.6, yaw: 0, aim_punch_angle: [-0.4 * i, 0, 0] });   // pulls down, imperfectly
+  }
+  for (let t = 0; t < 400; t += 4) samples.push({ tick: t, steamid: 'me', is_alive: true, pitch: 10, yaw: (t * 3) % 360, X: t, Y: 0 });   // normal turning
+  const r = mechanicsChecks({ deaths: [], killWindows: [], fires, fireRows, samples, jumps: [], roundStarts: [0] }, 'me');
+  assert.equal(r.stillSprays, 0); assert.equal(r.spinRuns, 0); assert.equal(r.rageTicks, 0); assert.equal(r.bhopChains, 0);
+});
+
+test('"how did I die?" notes odd kills on each victim', () => {
+  const { analyze } = require('../lib/demoScan');
+  const r = analyze({ players: [{ steamid: 'a', name: 'A' }, { steamid: 'v', name: 'V' }], roundStarts: [0], samples: [], killWindows: [],
+    deaths: [{ tick: 500, attacker_steamid: 'a', user_steamid: 'v', weapon: 'ak47', thrusmoke: true }, { tick: 900, attacker_steamid: 'a', user_steamid: 'v', weapon: 'ak47' }] });
+  const v = r.find((x) => x.steamid === 'v');
+  assert.equal(v.deathsTotal, 2);
+  assert.equal(v.oddDeaths.length, 1);
+  assert.deepEqual(v.oddDeaths[0].reasons, ['through smoke']);
+});

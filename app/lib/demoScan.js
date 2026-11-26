@@ -132,8 +132,15 @@ function analyze(data, T = THRESHOLDS) {
     for (const [key, cur] of streaks) closeStreak(key, cur);
   }
 
-  // ---- 2) kills: snaps, reaction time, unseen wallbangs
+  // ---- 2) kills: snaps, reaction time, unseen wallbangs (+ "how did I die?" notes for each victim)
+  const deathLog = new Map();   // victim -> { total, odd: [{ tick, round, killer, killerName, weapon, reasons }] }
+  const names = new Map((data.players || []).map((p) => [sid(p.steamid), p.name]));
   for (const d of data.deaths || []) {
+    const vic = sid(d.user_steamid);
+    if (vic && sid(d.attacker_steamid) && sid(d.attacker_steamid) !== vic) {
+      const e = deathLog.get(vic) || { total: 0, odd: [] }; e.total += 1; deathLog.set(vic, e);
+    }
+    const why = [];
     const st = get(d.attacker_steamid);
     if (!st || sid(d.attacker_steamid) === sid(d.user_steamid)) continue;
     if (NON_AIM_WEAPONS.test(d.weapon || '')) continue;
@@ -148,6 +155,7 @@ function analyze(data, T = THRESHOLDS) {
       if (turned >= T.snapMinTurn && aimError(endA, endV) <= T.snapMaxFinalError &&
           aimError(startA, startV) >= T.snapMinStartError) {
         st.snaps += 1; st.rounds.add(round); st.moments.push({ tick: d.tick - T.snapWindow - 32, round, what: 'Snap kill' });
+        why.push(`snapped ${Math.round(turned)}° onto you`);
       }
     }
 
@@ -162,11 +170,24 @@ function analyze(data, T = THRESHOLDS) {
     }
     if (anySpotData) {
       if (firstSpot === null) {
-        if (Number(d.penetrated) > 0 && !d.thrusmoke) { st.unseenWallbangs += 1; st.rounds.add(round); st.moments.push({ tick: d.tick - 128, round, what: 'Wallbang kill on an unseen enemy' }); }
+        if (Number(d.penetrated) > 0 && !d.thrusmoke) { st.unseenWallbangs += 1; st.rounds.add(round); st.moments.push({ tick: d.tick - 128, round, what: 'Wallbang kill on an unseen enemy' }); why.push('wallbanged you without ever seeing you'); }
       } else if (firstSpot > d.tick - 64) {
         st.reactions.push(d.tick - firstSpot);
+        // tracked you through the wall just before you came into view?
+        let on = 0, first = null, last = null;
+        for (let t = Math.max(d.tick - 64, firstSpot - 24); t < firstSpot; t++) {
+          const a = at(t, d.attacker_steamid), v = at(t, d.user_steamid);
+          if (!a || !v) continue;
+          first = first || a; last = a;
+          const dist = distance(a, v);
+          if (dist > T.trackMinDistance && aimError(a, v) <= Math.min(T.trackMaxError, Math.atan(T.trackBodyUnits / dist) * 180 / Math.PI)) on += 1;
+        }
+        if (on >= 12 && first && last && viewDelta(first, last) >= 4) why.push('followed you through the wall before you were visible');
       }
     }
+    if (d.thrusmoke) why.push('through smoke');
+    if (d.attackerblind) why.push('while they were flashed');
+    if (why.length && deathLog.has(vic)) deathLog.get(vic).odd.push({ tick: d.tick - 192, round, killer: sid(d.attacker_steamid), killerName: names.get(sid(d.attacker_steamid)) || '', weapon: d.weapon || '', reasons: why });
   }
 
   // ---- 3) verdicts
@@ -185,6 +206,7 @@ function analyze(data, T = THRESHOLDS) {
       metrics,
     });
   }
+  for (const r of results) { const e = deathLog.get(r.steamid); if (e) { r.deathsTotal = e.total; r.oddDeaths = e.odd.slice(0, 15); } }
   return results.sort((a, b) => b.score - a.score);
 }
 
@@ -302,7 +324,7 @@ function scanDemo(demoPath, T = THRESHOLDS) {
   // fun stats for the Stats tab (never allowed to break detection)
   try {
     const stats = require('./matchStats').parseStats(demoPath, { players, deaths, roundStarts, samples });
-    for (const r of results) if (stats.has(r.steamid)) r.stats = stats.get(r.steamid);
+    for (const r of results) if (stats.has(r.steamid)) { r.stats = { ...stats.get(r.steamid) }; r.highlights = stats.get(r.steamid).highlights || []; }
   } catch (_) {}
   const teams = finalScore(dp, demoPath);
   addLeavers(teams, players, samples);
@@ -328,9 +350,179 @@ const DEEP = {
   preWindow: 24, preMinOnTicks: 16, preMinTurn: 4, preAims: 3, preAimRate: 0.2,
   lockWindow: 16, lockMaxError: 0.6, lockMinSweep: 4, locks: 3, lockRate: 0.25,
   smokeKills: 3, smokeRate: 0.2, hsMinKills: 12, hsRate: 0.8, blindKills: 3,
+  // bomb reads (CT): moving to the site the bomb ends up on before the CT team had any sight of it
+  bombAwayFrom: 1800, bombMoved: 1200, bombInfoRange: 1500, bombFakeRange: 2000, bombReads: 3, bombReadRate: 0.5, fakeReads: 2,
+  bombHabitRange: 2000, bombUnusual: 2, bombWrongRatio: 3,   // habits: reads must beat where they go anyway
+  // triggerbot: fired within 1 tick of the crosshair sliding onto an enemy, kill after kill
+  trigMaxTicks: 1, trigMinMove: 1.0, trigBodyUnits: 18, trigKills: 4, trigRate: 0.6, trigMinEligible: 6,
+  // no-recoil: aim (view + recoil) stays dead still through a spray
+  sprayGapTicks: 10, sprayMinShots: 6, recoilStill: 0.1, recoilSprays: 4, recoilRate: 0.5,
+  // spinbot / rage: impossible pitch, or spinning faster than a hand can
+  rageTicks: 8, spinDegPerTick: 25, spinMinRun: 16,
+  // bhop scripts: long chains of jumps that each land and leave on the perfect tick while gaining speed
+  bhopMinGap: 36, bhopMaxGap: 48, bhopMinSpeed: 260, bhopChain: 6, bhopChains: 3,
 };
 
 /** data has the same shape as analyze(); killWindows must cover 96 ticks before each of the target's kills. */
+/**
+ * Bomb reads for one CT player. For every planted round: where did they start (5 s after freeze time) and
+ * how far had they moved toward the site the bomb was planted at by the moment their team first had any
+ * information about that site (a T seen within 1500 units of it, the plant starting, or a CT dying there)?
+ * Moving 1200+ units toward the right site from far away, again and again, with no information, is what
+ * radar/ESP looks like. A "fake read" is doing it while the planter had been seen far from that site.
+ */
+function bombReads(data, me, T) {
+  const rows = new Map();
+  for (const r of data.samples || []) { if (!rows.has(r.tick)) rows.set(r.tick, new Map()); rows.get(r.tick).set(sid(r.steamid), r); }
+  const ticks = [...rows.keys()].sort((a, b) => a - b);
+  const near = (t) => { let lo = 0, hi = ticks.length - 1, best = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (ticks[m] <= t) { best = ticks[m]; lo = m + 1; } else hi = m - 1; } return best; };
+  const out = { away: 0, reads: 0, fakeReads: 0, unusual: 0, wrong: 0, habit: {}, moments: [] };
+  const flat = (a, b) => Math.hypot(a.X - b.X, a.Y - b.Y);
+  // the match's bombsites = where bombs were planted (grouped), so we can tell "right site" from "the other site"
+  const sites = [];
+  for (const p of data.plants || []) {
+    const r = rows.get(near(p.tick)); const pl = r && r.get(sid(p.user_steamid));
+    if (!pl) continue;
+    const c = sites.find((x) => flat(x, pl) < T.bombInfoRange);
+    if (c) { c.X = (c.X * c.n + pl.X) / (c.n + 1); c.Y = (c.Y * c.n + pl.Y) / (c.n + 1); c.n += 1; } else sites.push({ X: pl.X, Y: pl.Y, n: 1 });
+  }
+  // habit: in rounds where the bomb did NOT go to a site, how often did they end up there anyway (35 s in)?
+  // Someone who walks to B every round has a high B habit; someone who only shows up where the bomb is, doesn't.
+  const plantRound = (p) => [...(data.roundStarts || [])].filter((t) => t < p.tick).pop();
+  const habitOf = (site) => {
+    let n = 0, there = 0;
+    for (const st of data.roundStarts || []) {
+      const plantedHere = (data.plants || []).some((p) => plantRound(p) === st && (() => { const r = rows.get(near(p.tick)); const pl = r && r.get(sid(p.user_steamid)); return pl && flat(pl, site) < T.bombInfoRange; })());
+      if (plantedHere) continue;
+      const r = rows.get(near(st + 35 * 64)); const row = r && r.get(me);
+      if (!row || row.team_num !== 3 || row.is_alive === false) continue;
+      n += 1; if (flat(row, site) < T.bombHabitRange) there += 1;
+    }
+    return n >= 3 ? there / n : 0.5;     // too few other rounds to know their habit: count reads at half weight
+  };
+  for (const st of sites) st.habit = habitOf(st);
+  for (const p of data.plants || []) {
+    const start = [...(data.roundStarts || [])].filter((t) => t < p.tick).pop();
+    if (start == null) continue;
+    const at = rows.get(near(p.tick)); const planter = at && at.get(sid(p.user_steamid));
+    if (!planter) continue;
+    const site = { X: planter.X, Y: planter.Y };
+    const begin = Math.min(p.tick, ...(data.beginPlants || []).filter((b) => b.tick > start && b.tick <= p.tick).map((b) => b.tick));
+    const t0 = near(start + 5 * 64);
+    const first = t0 != null && rows.get(t0).get(me);
+    if (!first || first.team_num !== 3 || first.is_alive === false) continue;
+    let infoTick = begin, sawFake = false;
+    for (const t of ticks) {
+      if (t < t0) continue;
+      if (t >= begin) break;
+      const snap = rows.get(t);
+      const cts = [...snap].filter(([, r]) => r.team_num === 3);
+      const ctIds = new Set(cts.map(([id]) => id));
+      let info = cts.some(([, r]) => r.is_alive === false && flat(r, site) < T.bombInfoRange);   // a CT died there
+      for (const [id, r] of snap) {
+        if (r.team_num !== 2 || r.is_alive === false) continue;
+        const seen = [...(spottedSet(r) || [])].some((x) => ctIds.has(x));
+        if (!seen) continue;
+        if (flat(r, site) < T.bombInfoRange) info = true;
+        else if (id === sid(p.user_steamid) && flat(r, site) > T.bombFakeRange) sawFake = true;
+      }
+      if (info) { infoTick = t; break; }
+    }
+    const last = rows.get(near(infoTick)) && rows.get(near(infoTick)).get(me);
+    if (!last || last.is_alive === false) continue;
+    const d0 = flat(first, site), d1 = flat(last, site);
+    if (d0 < T.bombAwayFrom) continue;     // already there (their spawn / their usual spot): not a read
+    out.away += 1;
+    const here = sites.find((x) => flat(x, site) < T.bombInfoRange) || { habit: 0 };
+    const other = sites.find((x) => x !== here);
+    if (other && flat(first, other) - flat(last, other) >= T.bombMoved && d0 - d1 < T.bombMoved) out.wrong += 1;   // went to the other site
+    if (d0 - d1 >= T.bombMoved) {
+      out.reads += 1;
+      out.unusual += 1 - here.habit;       // a site they head to most rounds anyway counts for little
+      if (sawFake && here.habit <= 0.5) out.fakeReads += 1;
+      out.moments.push({ tick: t0, round: roundAt(p.tick, data.roundStarts || []), what: sawFake ? 'Went to the real bomb site while the bomb was seen elsewhere' : 'Rotated to the bomb site before anyone saw it' });
+    }
+  }
+  out.habit = Object.fromEntries(sites.map((x, i) => [i, Math.round(x.habit * 100)]));
+  return out;
+}
+
+const SPRAY_WEAPONS = /ak47|m4a1|m4a1_silencer|famas|galilar|aug|sg556|mp9|mac10|mp7|mp5sd|ump45|p90|bizon|m249|negev|cz75a/;
+const punchOf = (row) => {
+  const v = row && row.aim_punch_angle;
+  if (v == null) return null;
+  if (Array.isArray(v)) return { p: Number(v[0]) || 0, y: Number(v[1]) || 0 };
+  if (typeof v === 'object') return { p: Number(v.x ?? v.X ?? v[0]) || 0, y: Number(v.y ?? v.Y ?? v[1]) || 0 };
+  return null;
+};
+
+/** Triggerbot, no-recoil, spinbot/rage and bhop-script checks for one player (Scrutinize only). */
+function mechanicsChecks(data, me, T = DEEP) {
+  const out = { trig: 0, trigEligible: 0, stillSprays: 0, sprays: 0, rageTicks: 0, spinRuns: 0, bhopChains: 0, moments: [] };
+  const rs = data.roundStarts || [];
+  // --- triggerbot (kill windows hold every tick before each of their kills)
+  const win = new Map();
+  for (const r of data.killWindows || []) { if (!win.has(r.tick)) win.set(r.tick, new Map()); win.get(r.tick).set(sid(r.steamid), r); }
+  const at = (t, who) => win.get(t) && win.get(t).get(sid(who));
+  const fires = (data.fires || []).filter((f) => sid(f.user_steamid) === me).map((f) => f.tick).sort((a, b) => a - b);
+  for (const d of data.deaths || []) {
+    if (sid(d.attacker_steamid) !== me || sid(d.user_steamid) === me || NON_AIM_WEAPONS.test(d.weapon || '')) continue;
+    const shot = fires.find((f) => f >= d.tick - 96 && f <= d.tick);
+    if (shot == null) continue;
+    let entry = null;
+    for (let t = shot - 16; t <= shot; t++) {
+      const a = at(t, me), v = at(t, d.user_steamid);
+      if (!a || !v) continue;
+      const dist = distance(a, v);
+      if (aimError(a, v) <= Math.atan(T.trigBodyUnits / Math.max(dist, 1)) * 180 / Math.PI) { entry = t; break; }
+    }
+    if (entry == null) continue;
+    const before = at(entry - 2, me), onIt = at(entry, me);
+    if (!before || !onIt || viewDelta(before, onIt) < T.trigMinMove) continue;   // crosshair was already resting there: not a trigger case
+    out.trigEligible += 1;
+    if (shot - entry <= T.trigMaxTicks) { out.trig += 1; out.moments.push({ tick: shot - 64, round: roundAt(shot, rs), what: 'Fired the instant the crosshair touched an enemy' }); }
+  }
+  // --- no-recoil: sprays of 6+ shots; aim = view + 2 x recoil punch should wander for a human
+  const fireRows = new Map((data.fireRows || []).filter((r) => sid(r.steamid) === me).map((r) => [r.tick, r]));
+  const myFires = (data.fires || []).filter((f) => sid(f.user_steamid) === me && SPRAY_WEAPONS.test(String(f.weapon || '')));
+  let spray = [];
+  const endSpray = () => {
+    if (spray.length >= T.sprayMinShots) {
+      const pts = spray.slice(3).map((t) => { const r = fireRows.get(t); const pu = punchOf(r); return r && pu ? r.pitch + 2 * pu.p : null; }).filter((x) => x != null);
+      if (pts.length >= 3) {
+        out.sprays += 1;
+        const mean = pts.reduce((a, b) => a + b, 0) / pts.length;
+        const sd = Math.sqrt(pts.reduce((a, b) => a + (b - mean) ** 2, 0) / pts.length);
+        if (sd < T.recoilStill) { out.stillSprays += 1; out.moments.push({ tick: spray[0] - 64, round: roundAt(spray[0], rs), what: 'Spray with no recoil movement at all' }); }
+      }
+    }
+    spray = [];
+  };
+  for (const f of myFires) { if (spray.length && f.tick - spray[spray.length - 1] > T.sprayGapTicks) endSpray(); spray.push(f.tick); }
+  endSpray();
+  // --- spinbot / rage (samples every few ticks)
+  const mine = (data.samples || []).filter((r) => sid(r.steamid) === me && r.is_alive !== false).sort((a, b) => a.tick - b.tick);
+  let run = 0, inSpin = false;
+  for (let i = 0; i < mine.length; i++) {
+    const r = mine[i], p = mine[i - 1];
+    if (Math.abs(Number(r.pitch)) > 89.5) out.rageTicks += 1;
+    const fast = p && r.tick - p.tick <= 8 && Math.abs(((r.yaw - p.yaw + 540) % 360) - 180) / (r.tick - p.tick) >= T.spinDegPerTick;
+    if (!fast) { run = 0; inSpin = false; continue; }
+    run += r.tick - p.tick;
+    if (run >= T.spinMinRun && !inSpin) { inSpin = true; out.spinRuns += 1; out.moments.push({ tick: r.tick - 64, round: roundAt(r.tick, rs), what: 'Spinning faster than a hand can' }); }
+  }
+  // --- bhop chains
+  const jumps = (data.jumps || []).filter((j) => sid(j.user_steamid) === me).map((j) => j.tick).sort((a, b) => a - b);
+  const speedAt = (t) => { const i = mine.findIndex((r) => r.tick >= t); const a = mine[i - 1], b = mine[i]; return a && b && b.tick > a.tick ? Math.hypot(b.X - a.X, b.Y - a.Y) / ((b.tick - a.tick) / 64) : 0; };
+  let chain = 1;
+  for (let i = 1; i <= jumps.length; i++) {
+    const gap = i < jumps.length ? jumps[i] - jumps[i - 1] : 0;
+    if (i < jumps.length && gap >= T.bhopMinGap && gap <= T.bhopMaxGap && speedAt(jumps[i]) >= T.bhopMinSpeed) chain += 1;
+    else { if (chain >= T.bhopChain) { out.bhopChains += 1; out.moments.push({ tick: jumps[i - 1] - 64 * 4, round: roundAt(jumps[i - 1], rs), what: `${chain} perfect bunny hops in a row` }); } chain = 1; }
+  }
+  return out;
+}
+
 function deepAnalyze(data, steamid, T = DEEP) {
   const me = sid(steamid);
   const base = analyze(data, T).find((r) => r.steamid === me);
@@ -376,6 +568,12 @@ function deepAnalyze(data, steamid, T = DEEP) {
       if (locked) { m.locks += 1; moments.push({ tick: d.tick - T.lockWindow - 32, round, what: 'Crosshair locked on a moving target' }); }
     }
   }
+  const bomb = bombReads(data, me, T);
+  const mech = mechanicsChecks(data, me, T);
+  Object.assign(m, { trig: mech.trig, trigEligible: mech.trigEligible, stillSprays: mech.stillSprays, sprays: mech.sprays, rageTicks: mech.rageTicks, spinRuns: mech.spinRuns, bhopChains: mech.bhopChains });
+  moments.push(...mech.moments);
+  m.bombAway = bomb.away; m.bombReads = bomb.reads; m.fakeReads = bomb.fakeReads; m.bombWrong = bomb.wrong; m.bombUnusual = Math.round(bomb.unusual * 10) / 10;
+  moments.push(...bomb.moments);
   const verdict = judge(base.metrics, T, 'high');    // strict thresholds, any one signal counts
   const signals = [...verdict.signals];
   const rate = (n, of) => (of ? n / of : 0);
@@ -383,6 +581,12 @@ function deepAnalyze(data, steamid, T = DEEP) {
   if (m.locks >= T.locks && rate(m.locks, m.checkedKills) >= T.lockRate) signals.push({ type: 'aimbot', name: 'Crosshair locked on moving targets', value: `${m.locks} of ${m.checkedKills} kills`, extreme: false });
   if (m.smokeKills >= T.smokeKills && rate(m.smokeKills, m.kills) >= T.smokeRate) signals.push({ type: 'wallhack', name: 'Kills through smoke', value: `${m.smokeKills} of ${m.kills} kills`, extreme: false });
   if (m.kills >= T.hsMinKills && rate(m.headshots, m.kills) >= T.hsRate) signals.push({ type: 'aimbot', name: 'Extreme headshot rate', value: Math.round(rate(m.headshots, m.kills) * 100) + '%', extreme: false });
+  if (bomb.reads >= T.bombReads && rate(bomb.reads, bomb.away) >= T.bombReadRate && bomb.unusual >= T.bombUnusual && bomb.reads >= T.bombWrongRatio * bomb.wrong) signals.push({ type: 'wallhack', name: 'Rotated to the bomb site before anyone saw it', value: `${bomb.reads} of ${bomb.away} planted rounds, wrong site ${bomb.wrong}×`, extreme: false });
+  if (bomb.fakeReads >= T.fakeReads) signals.push({ type: 'wallhack', name: 'Ignored fakes: went to the real site while the bomb was seen elsewhere', value: `${bomb.fakeReads} rounds`, extreme: false });
+  if (mech.trig >= T.trigKills && mech.trigEligible >= T.trigMinEligible && rate(mech.trig, mech.trigEligible) >= T.trigRate) signals.push({ type: 'aimbot', name: 'Triggerbot: fired the instant the crosshair touched an enemy', value: `${mech.trig} of ${mech.trigEligible} kills`, extreme: false });
+  if (mech.stillSprays >= T.recoilSprays && rate(mech.stillSprays, mech.sprays) >= T.recoilRate) signals.push({ type: 'aimbot', name: 'No recoil: sprays with no recoil movement', value: `${mech.stillSprays} of ${mech.sprays} sprays`, extreme: false });
+  if (mech.rageTicks >= T.rageTicks || mech.spinRuns >= 1) signals.push({ type: 'aimbot', name: 'Rage cheat: impossible view angles or spinning', value: mech.spinRuns ? `${mech.spinRuns} spins` : 'impossible aim angles', extreme: true });
+  if (mech.bhopChains >= T.bhopChains) signals.push({ type: 'aimbot', name: 'Bhop script: perfect bunny-hop chains', value: `${mech.bhopChains} chains`, extreme: false });
   if (m.blindKills >= T.blindKills) signals.push({ type: 'aimbot', name: 'Kills while fully flashed', value: m.blindKills, extreme: false });
   const wall = signals.filter((x) => x.type === 'wallhack').length, aim = signals.length - wall;
   const rounds = new Set(base.rounds); for (const x of moments) rounds.add(x.round);
@@ -416,8 +620,14 @@ function deepScan(demoPath, steamid, T = DEEP) {
   }
   const samples = dp.parseTicks(demoPath, props, sampleList);
   const killWindows = dp.parseTicks(demoPath, props, [...windowSet]);
-  return deepAnalyze({ players, deaths, roundStarts, samples, killWindows }, steamid, T);
+  let plants = [], beginPlants = [];
+  try { plants = dp.parseEvent(demoPath, 'bomb_planted') || []; beginPlants = dp.parseEvent(demoPath, 'bomb_beginplant') || []; } catch (_) {}
+  let fires = [], jumps = [], fireRows = [];
+  try { fires = (dp.parseEvent(demoPath, 'weapon_fire') || []).filter((f) => sid(f.user_steamid) === sid(steamid)); } catch (_) {}
+  try { jumps = (dp.parseEvent(demoPath, 'player_jump') || []).filter((j) => sid(j.user_steamid) === sid(steamid)); } catch (_) {}
+  try { if (fires.length) fireRows = dp.parseTicks(demoPath, ['pitch', 'yaw', 'aim_punch_angle'], [...new Set(fires.map((f) => f.tick))]); } catch (_) {}
+  return deepAnalyze({ players, deaths, roundStarts, samples, killWindows, plants, beginPlants, fires, jumps, fireRows }, steamid, T);
 }
 
 const SCANNER_VERSION = 5;
-module.exports = { addLeavers, analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION };
+module.exports = { addLeavers, bombReads, mechanicsChecks, analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION };

@@ -22,6 +22,7 @@ function round() {
     hurts: [{ tick: 900, attacker_steamid: 'a1', user_steamid: 'b1', dmg_health: 40, weapon: 'hegrenade' }, { tick: 950, attacker_steamid: 'a2', user_steamid: 'a1', dmg_health: 10, weapon: 'glock' }],
     blinds: [{ tick: 800, attacker_steamid: 'a2', user_steamid: 'a1', blind_duration: 3.2 }, { tick: 800, attacker_steamid: 'b2', user_steamid: 'a1', blind_duration: 2 }],
     plants: [], defuses: [],
+    econ: ['a1', 'a2', 'a3', 'b1', 'b2'].map((id) => ({ tick: 500 + 6 * 64, steamid: id, current_equip_value: 800, cash_spent_this_round: 200, team_num: id[0] === 'a' ? 2 : 3 })),
   };
 }
 
@@ -43,6 +44,7 @@ test('fun stats: entry, clutch, utility, team flash, weapons', () => {
   assert.equal(g('b2').enemiesFlashed, 1);
   assert.equal(g('b1').saves + g('b2').saves, 0);
   assert.ok(g('a3').distance > 0);
+  assert.equal(g('a1').pistolRounds, 1); assert.equal(g('a1').pistolWins, 1); assert.equal(g('b1').pistolWins, 0); assert.equal(g('a1').moneySpent, 200);
   const aw = awards(s, new Set(['a1', 'a2', 'a3']));
   assert.ok(aw.get('a3').includes('clutcher'));
   assert.ok(!aw.has('b1'));                     // only members get awards

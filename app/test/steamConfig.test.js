@@ -38,7 +38,7 @@ test('vdf: round-trips and edits CS2 launch options only', () => {
   node.LaunchOptions = mergeLaunchOptions(node.LaunchOptions);
   const out = writeVdf(root);
   const again = parseVdf(out);
-  assert.equal(cs2AppNode(again).LaunchOptions, '-novid +fps_max 0 -condebug -netconport 2121');
+  assert.equal(cs2AppNode(again).LaunchOptions, '-novid +fps_max 0 -condebug +exec cheaterflag');
   assert.equal(again.UserLocalConfigStore.Software.Valve.Steam.apps['440'].LastPlayed, '1');
   assert.equal(again.UserLocalConfigStore.Software.Valve.Steam.path, 'C:\\\\Program Files');
   assert.equal(again.UserLocalConfigStore.friends.x, 'y');
@@ -48,12 +48,12 @@ test('vdf: round-trips and edits CS2 launch options only', () => {
 test('vdf: creates CS2 node when missing', () => {
   const root = parseVdf('"UserLocalConfigStore"\n{\n}\n');
   cs2AppNode(root, true).LaunchOptions = mergeLaunchOptions('');
-  assert.equal(cs2AppNode(parseVdf(writeVdf(root))).LaunchOptions, '-condebug -netconport 2121');
+  assert.equal(cs2AppNode(parseVdf(writeVdf(root))).LaunchOptions, '-condebug +exec cheaterflag');
 });
 
 test('launch options: no duplicates, detects existing', () => {
-  assert.equal(mergeLaunchOptions('-condebug -netconport 2121'), '-condebug -netconport 2121');
-  assert.equal(mergeLaunchOptions('-netconport 3000'), '-netconport 3000 -condebug');
-  assert.ok(hasNeededFlags('-novid -condebug -netconport 2121'));
+  assert.equal(mergeLaunchOptions('-condebug +exec cheaterflag'), '-condebug +exec cheaterflag');
+  assert.equal(mergeLaunchOptions('-netconport 3000 +exec autoexec'), '-netconport 3000 +exec autoexec -condebug +exec cheaterflag');
+  assert.ok(hasNeededFlags('-novid -condebug +exec cheaterflag'));
   assert.ok(!hasNeededFlags('-novid'));
 });

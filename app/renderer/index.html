@@ -93,6 +93,7 @@
         <select id="statDays"><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="0" selected>All time</option></select></div>
       </div>
       <p class="muted">CheaterFlag members only. K/D, HS %, MVPs and Win % cover every Premier/Competitive match in your Steam history plus FACEIT. The fun columns (opening duels, clutches, trades, utility…) come from matches with a demo (about the last week, plus demos saved on your PCs) and FACEIT where it has them. Numbers show % or per-match by default (tick <b>Show totals</b> for counts). Click a column to sort; hover it for what it means.</p>
+      <div id="recap" class="card recap hidden"></div>
       <div id="statTable"></div>
     </section>
 
@@ -132,6 +133,7 @@
       <div class="card">
         <label class="check"><input type="checkbox" id="pLogin" /> Start CheaterFlag when Windows starts</label>
         <label class="check"><input type="checkbox" id="pNotify" /> Show notifications</label>
+        <label class="check"><input type="checkbox" id="pTab" /> Full lobby list: holding <b>TAB</b> in CS2 also lists every player for CheaterFlag <span class="muted">(your scoreboard works as normal; takes effect next time CS2 starts)</span></label>
       </div>
       <div class="card">
         <h3>Match demos</h3>

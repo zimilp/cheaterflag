@@ -6,7 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const NEEDED_FLAGS = ['-condebug', '-netconport 2121'];
+// -condebug: CS2 writes its console to console.log (players joining, `status` replies)
+// +exec cheaterflag: runs CheaterFlag's small cfg (the optional TAB player-list bind)
+const NEEDED_FLAGS = ['-condebug', '+exec cheaterflag'];
 const STEAM64_BASE = 76561197960265728n;
 
 // ---------- minimal VDF (Valve KeyValues) parser / writer
@@ -84,8 +86,8 @@ function child(obj, key, create = false) {
 function mergeLaunchOptions(existing) {
   let opts = (existing || '').trim();
   for (const f of NEEDED_FLAGS) {
-    const name = f.split(' ')[0];
-    if (!new RegExp('(^|\\s)' + name + '(\\s|$)').test(opts)) opts = (opts + ' ' + f).trim();
+    const needle = (f.startsWith('+') ? f : f.split(' ')[0]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');   // "+exec x" must match whole
+    if (!new RegExp('(^|\\s)' + needle + '(\\s|$)').test(opts)) opts = (opts + ' ' + f).trim();
   }
   return opts;
 }

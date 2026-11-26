@@ -5,12 +5,14 @@
 const sid = (v) => (v == null ? null : String(v));
 const TRADE_TICKS = 5 * 64;
 const SITE_RANGE = 1100;              // units from a bombsite centre that still count as "holding that site"
-const LURK_RANGE = 1200;              // units from the nearest teammate that count as lurking           // a kill within 5 s of a teammate's death avenges it
+const LURK_RANGE = 1200;
+const ECO_MAX = 1500;                 // equipment value: under this is an eco/save round
+const FULL_MIN = 3800;                // this or more is a full buy (in between is a force buy)              // units from the nearest teammate that count as lurking           // a kill within 5 s of a teammate's death avenges it
 const UTIL = /hegrenade|inferno|molotov|incgrenade/;
 const KNIFE = /knife|bayonet/;
 const FIELDS = ['rounds', 'kills', 'deaths', 'assists', 'headshots', 'damage', 'utilDamage', 'flashAssists', 'enemiesFlashed', 'teamFlashSecs',
   'entryKills', 'firstDeaths', 'trades', 'clutchWins', 'clutchAttempts', 'bestClutch', 'saves', 'plants', 'defuses', 'ninjaDefuses',
-  'roundsT', 'roundsCT', 'ctA', 'ctB', 'tLurk', 'ctN', 'ctX', 'ctY', 'ctAX', 'ctAY', 'ctBX', 'ctBY', 'siteAX', 'siteAY', 'siteAN', 'siteBX', 'siteBY', 'siteBN', 'k3', 'k4', 'aces', 'awpKills', 'knifeKills', 'wallbangs', 'smokeKills', 'blindKills', 'noscopes', 'teamKills', 'distance'];
+  'pistolRounds', 'pistolWins', 'ecoRounds', 'ecoWins', 'forceRounds', 'forceWins', 'fullRounds', 'fullWins', 'moneySpent', 'roundsT', 'roundsCT', 'ctA', 'ctB', 'tLurk', 'ctN', 'ctX', 'ctY', 'ctAX', 'ctAY', 'ctBX', 'ctBY', 'siteAX', 'siteAY', 'siteAN', 'siteBX', 'siteBY', 'siteBN', 'k3', 'k4', 'aces', 'awpKills', 'knifeKills', 'wallbangs', 'smokeKills', 'blindKills', 'noscopes', 'teamKills', 'distance'];
 
 const blank = () => Object.fromEntries(FIELDS.map((f) => [f, 0]));
 const dist2d = (a, b) => Math.hypot(a.X - b.X, a.Y - b.Y);
@@ -69,12 +71,16 @@ function computeStats(data) {
     return best;
   };
 
+  const econ = tickOf(data.econ);
+  const highlights = new Map();
+  const hl = (id, h) => { if (!highlights.has(id)) highlights.set(id, []); highlights.get(id).push(h); };
+
   // ---- kills and deaths
   for (const r of rounds) {
     for (const id of r.team.keys()) st(id).rounds += 1;
     const deaths = (data.deaths || []).filter((d) => d.tick > r.start - 64 && d.tick <= r.end + 64).sort((a, b) => a.tick - b.tick);
     const alive = new Map([...r.team.keys()].map((id) => [id, true]));
-    const killsThisRound = new Map();
+    const killsThisRound = new Map(), firstKillTick = new Map();
     let first = true;
     const clutch = new Map();   // team -> { id, vs }
     for (let i = 0; i < deaths.length; i++) {
@@ -87,7 +93,7 @@ function computeStats(data) {
       if (k && st(k) && kt && kt === vt && k !== v) st(k).teamKills += 1;
       if (enemyKill) {
         const s = st(k);
-        s.kills += 1; killsThisRound.set(k, (killsThisRound.get(k) || 0) + 1);
+        s.kills += 1; killsThisRound.set(k, (killsThisRound.get(k) || 0) + 1); if (!firstKillTick.has(k)) firstKillTick.set(k, d.tick);
         if (d.headshot) s.headshots += 1;
         const w = String(d.weapon || '');
         if (w === 'awp') s.awpKills += 1;
@@ -113,12 +119,13 @@ function computeStats(data) {
         if (clutch.has(t)) continue;
         const mine = [...alive].filter(([id, al]) => al && r.team.get(id) === t).map(([id]) => id);
         const enemies = [...alive].filter(([id, al]) => al && r.team.get(id) && r.team.get(id) !== t).length;
-        if (mine.length === 1 && enemies >= 1 && [...r.team.values()].filter((x) => x === t).length >= 2) clutch.set(t, { id: mine[0], vs: enemies });
+        if (mine.length === 1 && enemies >= 1 && [...r.team.values()].filter((x) => x === t).length >= 2) clutch.set(t, { id: mine[0], vs: enemies, tick: d.tick });
       }
     }
+    const roundNo = rounds.indexOf(r) + 1;
     for (const [t, c] of clutch) {
       const s = st(c.id); s.clutchAttempts += 1;
-      if (r.winner === t) { s.clutchWins += 1; s.bestClutch = Math.max(s.bestClutch, c.vs); }
+      if (r.winner === t) { s.clutchWins += 1; s.bestClutch = Math.max(s.bestClutch, c.vs); if (c.vs >= 2) hl(c.id, { tick: c.tick - 64, round: roundNo, what: `1v${c.vs} clutch` }); }
     }
     // positions for role tags: CT site 20 s into the round (anchor A / B), T distance to teammates at 30 s (lurker)
     for (const [id, t] of r.team) {
@@ -137,7 +144,23 @@ function computeStats(data) {
         if (mates.length && Math.min(...mates.map(([, o]) => dist2d(row, o))) > LURK_RANGE) me.tLurk += 1;
       }
     }
-    for (const [id, n] of killsThisRound) { const s = st(id); if (n === 3) s.k3 += 1; else if (n === 4) s.k4 += 1; else if (n >= 5) s.aces += 1; }
+    for (const [id, n] of killsThisRound) {
+      const s = st(id); if (n === 3) s.k3 += 1; else if (n === 4) s.k4 += 1; else if (n >= 5) s.aces += 1;
+      if (n >= 4) hl(id, { tick: firstKillTick.get(id) - 128, round: roundNo, what: n >= 5 ? 'Ace' : '4K' });
+    }
+    // economy: what each player had on 6 s into the round (buy time is over), and whether their team won it
+    const half = rounds.length >= 13 ? 12 : Math.ceil(rounds.length / 2);
+    const pistol = roundNo === 1 || roundNo === half + 1;
+    for (const [id, t] of r.team) {
+      const e = econ.get(r.start + 6 * 64) && econ.get(r.start + 6 * 64).get(id);
+      if (!e) continue;
+      const s = st(id), won = r.winner === t ? 1 : 0, value = Number(e.current_equip_value) || 0;
+      s.moneySpent += Number(e.cash_spent_this_round) || 0;
+      if (pistol) { s.pistolRounds += 1; s.pistolWins += won; }
+      else if (value < ECO_MAX) { s.ecoRounds += 1; s.ecoWins += won; }
+      else if (value < FULL_MIN) { s.forceRounds += 1; s.forceWins += won; }
+      else { s.fullRounds += 1; s.fullWins += won; }
+    }
     if (r.winner) for (const [id, al] of alive) if (al && r.team.get(id) !== r.winner) st(id).saves += 1;
     // ninja defuse: defused with a T still alive
     for (const df of data.defuses || []) {
@@ -180,6 +203,7 @@ function computeStats(data) {
       last.set(id, r);
     }
   }
+  for (const [id, x] of S) Object.defineProperty(x, 'highlights', { value: highlights.get(id) || [], enumerable: false });
   for (const x of S.values()) {
     if (centre.A[2]) { x.siteAX = centre.A[0] / centre.A[2]; x.siteAY = centre.A[1] / centre.A[2]; x.siteAN = 1; }
     if (centre.B[2]) { x.siteBX = centre.B[0] / centre.B[2]; x.siteBY = centre.B[1] / centre.B[2]; x.siteBN = 1; }
@@ -202,12 +226,14 @@ function parseStats(demoPath, base = {}) {
     const list = []; for (let t = 0; t <= lastTick; t += 8) list.push(t);
     samples = dp.parseTicks(demoPath, ['X', 'Y', 'is_alive', 'team_num'], list);
   }
+  let econ = [];
+  try { if (roundStarts.length) econ = dp.parseTicks(demoPath, ['current_equip_value', 'cash_spent_this_round', 'team_num'], roundStarts.map((fe) => fe + 6 * 64)); } catch (_) {}
   const snapTicks = [];
   for (const fe of roundStarts) snapTicks.push(fe + 20 * 64, fe + 30 * 64);
   let snaps = [];
   try { if (snapTicks.length) snaps = dp.parseTicks(demoPath, ['X', 'Y', 'is_alive', 'team_num', 'last_place_name'], snapTicks); } catch (_) {}
   return computeStats({
-    players, deaths, roundStarts, roundEnds, samples, snaps,
+    players, deaths, roundStarts, roundEnds, samples, snaps, econ,
     hurts: ev('player_hurt'), blinds: ev('player_blind'), plants: ev('bomb_planted'), defuses: ev('bomb_defused'),
   });
 }

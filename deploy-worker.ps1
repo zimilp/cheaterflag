@@ -6,13 +6,13 @@ Set-Location $PSScriptRoot
 
 function Read-Env($path) {
   $h = @{}
-  foreach ($l in Get-Content $path) { if ($l -match '^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$') { $h[$matches[1]] = $matches[2].Trim('"', "'") } }
+  foreach ($l in [IO.File]::ReadAllLines((Resolve-Path $path), [Text.Encoding]::UTF8)) { if ($l -match '^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$') { $h[$matches[1]] = $matches[2].Trim('"', "'") } }
   return $h
 }
 function Set-EnvValue($path, $key, $value) {
-  $lines = Get-Content $path
+  $lines = @([IO.File]::ReadAllLines((Resolve-Path $path), [Text.Encoding]::UTF8))   # UTF-8 in and out (PS 5.1 Get-Content reads ANSI and garbles)
   if ($lines -match "^$key=") { $lines = $lines -replace "^$key=.*", "$key=$value" } else { $lines += "$key=$value" }
-  [IO.File]::WriteAllText((Resolve-Path $path), (($lines -join "`r`n") + "`r`n"))
+  [IO.File]::WriteAllText((Resolve-Path $path), (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding $false))
 }
 
 $secrets = Read-Env 'secrets.env'
@@ -26,7 +26,7 @@ if ($LASTEXITCODE -ne 0 -or $who -match 'not authenticated|wrangler login') {
   if ($LASTEXITCODE -ne 0) { throw 'Cloudflare sign-in did not complete.' }
 }
 
-$toml = Get-Content wrangler.toml -Raw
+$toml = [IO.File]::ReadAllText((Resolve-Path 'wrangler.toml'), [Text.Encoding]::UTF8)
 if ($toml -match 'REPLACE_WITH_D1_ID') {
   Write-Host "== Creating database ==" -ForegroundColor Cyan
   $out = npx wrangler d1 create cheaterflag 2>&1 | Out-String
