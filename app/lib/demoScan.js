@@ -328,6 +328,9 @@ function scanDemo(demoPath, T = THRESHOLDS) {
   } catch (_) {}
   const teams = finalScore(dp, demoPath);
   addLeavers(teams, players, samples);
+  // who killed whom, by round (for chat reports: "who was the accuser killed by around then?")
+  for (const r of results) r.killedBy = deaths.filter((d) => sid(d.user_steamid) === r.steamid && d.attacker_steamid && sid(d.attacker_steamid) !== r.steamid)
+    .map((d) => ({ round: roundAt(d.tick, roundStarts), killer: sid(d.attacker_steamid) })).slice(0, 40);
   for (const r of results) {
     const own = teams.find((t) => t.players.includes(r.steamid));
     const opp = teams.find((t) => t !== own);
@@ -629,5 +632,8 @@ function deepScan(demoPath, steamid, T = DEEP) {
   return deepAnalyze({ players, deaths, roundStarts, samples, killWindows, plants, beginPlants, fires, jumps, fireRows }, steamid, T);
 }
 
+// Bump these whenever detection changes: every app then re-scans its matches (SCANNER_VERSION) and re-checks every
+// player it scrutinized (SCRUTINY_VERSION). test/versions.test.js fails if the rules change without a bump.
 const SCANNER_VERSION = 6;   // 6: "how did I die", players who left early, highlights, economy
-module.exports = { addLeavers, bombReads, mechanicsChecks, analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION };
+const SCRUTINY_VERSION = 2;  // 2: bomb reads (with habits), triggerbot, no-recoil, spinbot/rage, bhop
+module.exports = { addLeavers, bombReads, mechanicsChecks, analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION, SCRUTINY_VERSION };

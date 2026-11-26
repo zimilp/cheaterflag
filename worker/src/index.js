@@ -498,9 +498,10 @@ async function route(req, env) {
       moments: (Array.isArray(body.extra.moments) ? body.extra.moments : []).slice(0, 20).map((x) => ({ tick: Number(x.tick) || 0, round: Number(x.round) || 0, what: String(x.what || '').slice(0, 60) })),
       score: body.extra.score && Number.isFinite(+body.extra.score.own) && Number.isFinite(+body.extra.score.opp) ? { own: +body.extra.score.own, opp: +body.extra.score.opp } : null,
       demoUrl: /^https?:\/\/replay\d+\.valve\.net\/730\/\d+_\d+\.dem(\.bz2)?$/.test(body.extra.demoUrl || '') ? body.extra.demoUrl : null,
+      reported: body.extra.reported ? String(body.extra.reported).slice(0, 160) : null,   // chat call-out that led to an automatic Scrutinize
     } : null;
     if (extra) extra.scannerVersion = Number(body.extra.scannerVersion) || 0;
-    if (extra && body.extra.scrutinized === true) extra.scrutinized = true;   // manual Scrutinize: survives scanner updates
+    if (extra && body.extra.scrutinized === true) { extra.scrutinized = true; extra.scrutinyVersion = Number(body.extra.scrutinyVersion) || 1; }   // manual Scrutinize: survives scanner updates
     const sid64 = String(body.steamid);
     const vals = [String(body.name || '').slice(0, 64), String(body.category || '').slice(0, 40), Number(body.score) || 0,
       JSON.stringify(body.rounds || []).slice(0, 2000), JSON.stringify(body.signals || []).slice(0, 4000), String(body.map || '').slice(0, 40), m.steamid, now(),
@@ -522,6 +523,13 @@ async function route(req, env) {
       await env.DB.prepare("UPDATE flags SET status = 'confirmed', reviewed_by = 'auto: already blacklisted' WHERE share_code = ? AND steamid = ?").bind(body.shareCode, sid64).run();
       return json({ ok: true, carriedOver: 'confirmed' });
     }
+    return json({ ok: true });
+  }
+  // a re-check of your own Scrutinize under newer rules came back clean: take that flag back if nobody decided it yet
+  if (p === '/flags/withdraw' && req.method === 'POST') {
+    if (!MATCH_KEY.test(body.shareCode || '') || !STEAM64.test(String(body.steamid || ''))) throw new HttpError(400, 'Invalid flag.');
+    await env.DB.prepare("UPDATE flags SET status = 'cleared', reviewed_by = 'rescan' WHERE share_code = ? AND steamid = ? AND status = 'pending' AND reporter = ? AND COALESCE(json_extract(extra, '$.scrutinized'), 0) = 1")
+      .bind(body.shareCode, String(body.steamid), m.steamid).run();
     return json({ ok: true });
   }
   if (p === '/flags/supersede' && req.method === 'POST') {

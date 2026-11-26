@@ -11,7 +11,7 @@ const steamConfig = require('./lib/steamConfig');
 const tabStatus = require('./lib/tabStatus');
 const retention = require('./lib/retention');
 const { GameState, installCfg } = require('./lib/gsi');
-const { SCANNER_VERSION } = require('./lib/demoScan');
+const { SCANNER_VERSION, SCRUTINY_VERSION } = require('./lib/demoScan');
 const STEAM64_BASE = 76561197960265728n;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -182,8 +182,15 @@ function startServices() {
   lobby.on('netcon', (on) => { lobbyState.netcon = on; send('lobby', lobbyState); });
   lobby.on('matchStart', () => { lobbyState.players = []; lobbyState.checks = {}; lobbyState.names = []; lobbyState.nameHits = {}; send('lobby', lobbyState); });
   lobby.on('names', onLobbyNames);
+  // someone calls out a cheater in chat: remember it, and scrutinize that player as soon as the match is scanned
+  lobby.on('accusation', (a) => {
+    const rep = { ...a, round: gsi && gsi.state && gsi.state.round || null, done: false };
+    store.set({ chatReports: [...(store.get('chatReports') || []).filter((x) => Date.now() - x.at < 3 * 86400000), rep].slice(-100) });
+    lobbyState.reports = [...(lobbyState.reports || []), rep];
+    send('lobby', lobbyState);
+  });
   lobby.on('map', (m) => { lobbyState.map = m; send('lobby', lobbyState); refreshSquad(); });
-  lobby.on('matchEnd', () => { lobbyState.players = []; lobbyState.checks = {}; lobbyState.names = []; lobbyState.nameHits = {}; lobbyState.live = null; lobbyState.lastStatus = null; lobbyState.map = null; clearInterval(liveTimer); send('lobby', lobbyState); refreshSquad(); });
+  lobby.on('matchEnd', () => { lobbyState.players = []; lobbyState.checks = {}; lobbyState.names = []; lobbyState.nameHits = {}; lobbyState.live = null; lobbyState.lastStatus = null; lobbyState.map = null; lobbyState.reports = []; clearInterval(liveTimer); send('lobby', lobbyState); refreshSquad(); });
   lobby.on('statusSeen', (x) => { lobbyState.lastStatus = x; send('lobby', lobbyState); });
   lobby.on('players', onLobbyPlayers);
   lobby.start();
@@ -193,6 +200,7 @@ function startServices() {
   watcher.on('backfill', (b) => { backfillStatus = b; send('backfill', b); });
   watcher.on('error', (e) => send('log', e.message));
   watcher.on('match', (m) => {
+    handleChatReports(m).catch(() => {});
     send('match', m);
     const flagged = m.results.filter((r) => r.flagged);
     const red = (m.checks || []).filter((c) => c.tier === 'rejected');
@@ -276,6 +284,123 @@ async function syncHistoryStats() {
     send('log', `Stats: added ${matches.length} past match${matches.length === 1 ? '' : 'es'} from your Steam match history.`);
   } catch (e) { send('log', 'Stats from Steam match history: ' + e.message); }
   finally { historySyncRunning = false; }
+}
+
+// Chat call-outs → automatic Scrutinize once the match's demo is scanned.
+// Target: a player named in the message; otherwise whoever killed the accuser in that round (or the round before).
+async function handleChatReports(m) {
+  const all = store.get('chatReports') || [];
+  const mapKey = (x) => String(x || '').toLowerCase().replace(/^(de|cs)_/, '');
+  const when = m.playedAt || m.at;
+  const mine = all.filter((r) => !r.done && (!r.map || !m.map || mapKey(r.map) === mapKey(m.map)) && r.at >= when - 100 * 60000 && r.at <= when + 15 * 60000);
+  if (!mine.length) return;
+  const key = m.shareCode || String(m.at);
+  const byName = (n) => m.results.find((x) => x.name && x.name.toLowerCase() === String(n).toLowerCase());
+  const jobs = new Map();
+  for (const rep of mine) {
+    rep.done = true;
+    let targets = (rep.targets || []).map(byName).filter(Boolean);
+    if (!targets.length) {
+      const accuser = byName(rep.by);
+      const kb = (accuser && accuser.killedBy) || [];
+      const k = kb.filter((d) => rep.round && (d.round === rep.round || d.round === rep.round - 1)).pop() || kb.filter((d) => !rep.round || d.round <= rep.round).pop();
+      const killer = k && m.results.find((x) => x.steamid === k.killer);
+      if (killer) targets = [killer];
+    }
+    for (const t of targets) if (t.steamid !== me()) jobs.set(t.steamid, rep);
+  }
+  store.set({ chatReports: all });
+  for (const [steamid, rep] of jobs) {
+    try {
+      await doScrutinize(key, steamid, { report: rep });
+      send('log', `Chat report: scrutinized ${m.results.find((x) => x.steamid === steamid).name} ("${rep.text}" — ${rep.by}${rep.round ? ', round ' + rep.round : ''}).`);
+    } catch (e) { send('log', 'Chat report scrutiny: ' + e.message); }
+  }
+}
+function me() { return store.get('steamid'); }
+
+// ---------- Scrutinize: deeper check of one player in one match; anything suspicious goes to Review.
+// Every scrutiny is remembered, and done again automatically whenever the detection rules change.
+const scrutinizing = new Set();
+const valveId = (h) => [h.demoUrl, h.keptDemo, h.shareCode].map((x) => (String(x || '').match(/(\d{15,30})_\d{6,12}/) || [])[1]).find(Boolean) || null;
+const prevDeep = (m, id) => ((m.results || []).find((x) => x.steamid === id) || {}).deep;
+function findMatch(key, matchId) {
+  const hist = store.get('history') || [];
+  return hist.find((x) => (x.shareCode || String(x.at)) === key) || (matchId && hist.find((x) => valveId(x) === matchId)) || null;
+}
+async function doScrutinize(key, steamid, { flagKey = null, matchId = null, report = null } = {}) {
+  const job = (matchId || key) + '|' + steamid;
+  if (scrutinizing.has(job)) throw new Error('Already checking this player.');
+  scrutinizing.add(job);
+  try {
+    const m = findMatch(key, matchId);
+    if (!m) throw new Error('Match not found.');
+    const mKey = m.shareCode || String(m.at);
+    const fKey = flagKey || mKey;
+    report = report || (prevDeep(m, String(steamid)) || {}).report || null;   // keep the chat report on re-checks                 // keep using the flag that was made the first time
+    let demo = m.keptDemo && fs.existsSync(m.keptDemo) ? m.keptDemo : null;
+    let downloaded = false;
+    if (!demo) {
+      if (!m.demoUrl) throw new Error("This match's demo is no longer on this PC.");
+      demo = await watcher.download(m.demoUrl, 'scrutiny_' + mKey);
+      downloaded = true;
+    }
+    const r = await runScan(demo, String(steamid));
+    let sent = null;
+    const prev = m.results.find((x) => x.steamid === r.steamid) || {};
+    if (r.flagged) {
+      sent = await api.submitFlag({
+        shareCode: fKey, steamid: r.steamid, name: r.name, category: r.category, score: r.score, rounds: r.rounds, signals: r.signals, map: m.map,
+        extra: { scannerVersion: SCANNER_VERSION, scrutinyVersion: SCRUTINY_VERSION, scrutinized: true, moments: r.moments, demoUrl: m.demoUrl,
+          reported: report ? `${report.by}${report.round ? ' (round ' + report.round + ')' : ''}: "${report.text}"`.slice(0, 160) : undefined,
+          score: prev.teamScore != null ? { own: prev.teamScore, opp: prev.oppScore } : null },
+      });
+    } else if (flagKey) {
+      await api.withdrawFlag(fKey, r.steamid).catch(() => {});   // re-check under new rules came back clean
+    }
+    let kept = m.keptDemo;
+    if (!m.local && (downloaded || r.flagged)) kept = retention.afterScan(demo, watcher.flaggedDir, r.flagged, watcher.keepCleanDays() > 0 ? watcher.cleanDir : null);
+    const deep = { flagged: r.flagged, signals: r.signals, category: r.category, moments: r.moments, at: Date.now(), v: SCRUTINY_VERSION, carriedOver: sent && sent.carriedOver || null, report: report ? { by: report.by, text: report.text, round: report.round } : null };
+    const hist = (store.get('history') || []).map((x) => ((x.shareCode || String(x.at)) !== mKey ? x
+      : { ...x, keptDemo: kept, results: x.results.map((p) => (p.steamid === r.steamid ? { ...p, deep } : p)) }));
+    store.set({ history: hist });
+    // remember it, so a detection update re-checks it
+    const log = (store.get('scrutinyLog') || []).filter((e) => !(e.steamid === r.steamid && (e.matchId ? e.matchId === valveId(m) : e.key === mKey)));
+    log.push({ key: mKey, matchId: valveId(m), steamid: r.steamid, flagKey: fKey, v: SCRUTINY_VERSION, at: Date.now() });
+    store.set({ scrutinyLog: log.slice(-300) });
+    send('match', hist.find((x) => (x.shareCode || String(x.at)) === mKey));
+    return deep;
+  } finally { scrutinizing.delete(job); }
+}
+
+// After a detection update (or a re-scan that replaced the match), scrutinize everything that was scrutinized before.
+let rescrutinyRunning = false;
+async function rescrutinize() {
+  if (rescrutinyRunning || !watcher || !store.get('token')) return;
+  rescrutinyRunning = true;
+  let done = 0;
+  try {
+    if (!store.get('scrutinyLogSeeded')) {   // players scrutinized before this was remembered
+      const log = store.get('scrutinyLog') || [];
+      for (const m of store.get('history') || []) for (const r of m.results || []) {
+        if (r.deep && !log.some((e) => e.steamid === r.steamid && e.key === (m.shareCode || String(m.at)))) log.push({ key: m.shareCode || String(m.at), matchId: valveId(m), steamid: r.steamid, flagKey: m.shareCode || String(m.at), v: 1, at: r.deep.at || Date.now() });
+      }
+      store.set({ scrutinyLog: log, scrutinyLogSeeded: true });
+    }
+    for (const e of [...(store.get('scrutinyLog') || [])]) {
+      const m = findMatch(e.key, e.matchId);
+      if (!m) continue;
+      const r = m.results.find((x) => x.steamid === e.steamid);
+      if (e.v === SCRUTINY_VERSION && r && r.deep && r.deep.v === SCRUTINY_VERSION) continue;   // up to date
+      if (!(m.keptDemo && fs.existsSync(m.keptDemo)) && !m.demoUrl) continue;                      // demo gone
+      while (watcher.busy) await new Promise((res) => setTimeout(res, 10000));
+      try { await doScrutinize(e.key, e.steamid, { flagKey: e.flagKey, matchId: e.matchId }); done++; }
+      catch (err) { if (/no longer|404|410/.test(err.message)) { /* Valve deleted it: nothing to redo */ } }
+    }
+  } finally {
+    rescrutinyRunning = false;
+    if (done) send('log', `Re-checked ${done} scrutinized player${done === 1 ? '' : 's'} with the latest detection rules.`);
+  }
 }
 
 // Fun stats for matches scanned before the Stats tab existed: use demos still on this PC, or
@@ -374,7 +499,7 @@ function startBackfill() {
     return timeOf(b) - timeOf(a);
   });
   backfillRunning = true;
-  watcher.backfill(items).catch((e) => send('log', e.message)).finally(() => { backfillRunning = false; });
+  watcher.backfill(items).catch((e) => send('log', e.message)).finally(() => { backfillRunning = false; rescrutinize(); });
 }
 
 // Reads the match-history codes and older-match links through the built-in Steam window.
@@ -531,45 +656,7 @@ function registerIpc() {
   h('reviewFlag', (id, action) => api.reviewFlag(id, action));
   h('members', () => api.members());
   h('setMember', (id, patch) => api.setMember(id, patch));
-  // Scrutinize: deeper check of one player in one match; anything suspicious goes to Review
-  const scrutinizing = new Set();
-  h('scrutinize', async (key, steamid) => {
-    const job = key + '|' + steamid;
-    if (scrutinizing.has(job)) throw new Error('Already checking this player.');
-    scrutinizing.add(job);
-    try {
-      const m = (store.get('history') || []).find((x) => (x.shareCode || String(x.at)) === key);
-      if (!m) throw new Error('Match not found.');
-      let demo = m.keptDemo && fs.existsSync(m.keptDemo) ? m.keptDemo : null;
-      let downloaded = false;
-      if (!demo) {
-        if (!m.demoUrl) throw new Error("This match's demo is no longer on this PC.");
-        demo = await watcher.download(m.demoUrl, 'scrutiny_' + key);
-        downloaded = true;
-      }
-      const r = await runScan(demo, String(steamid));
-      let sent = null;
-      const prev = m.results.find((x) => x.steamid === r.steamid) || {};
-      if (r.flagged) {
-        sent = await api.submitFlag({
-          shareCode: key, steamid: r.steamid, name: r.name, category: r.category, score: r.score, rounds: r.rounds, signals: r.signals, map: m.map,
-          extra: { scannerVersion: SCANNER_VERSION, scrutinized: true, moments: r.moments, demoUrl: m.demoUrl,
-            score: prev.teamScore != null ? { own: prev.teamScore, opp: prev.oppScore } : null },
-        });
-      }
-      let kept = m.keptDemo;
-      if (!m.local && (downloaded || r.flagged)) {
-        // keep the demo with the other flagged ones, or under the clean-demo setting
-        kept = retention.afterScan(demo, watcher.flaggedDir, r.flagged, watcher.keepCleanDays() > 0 ? watcher.cleanDir : null);
-      }
-      const deep = { flagged: r.flagged, signals: r.signals, category: r.category, moments: r.moments, at: Date.now(), carriedOver: sent && sent.carriedOver || null };
-      const hist = (store.get('history') || []).map((x) => ((x.shareCode || String(x.at)) !== key ? x
-        : { ...x, keptDemo: kept, results: x.results.map((p) => (p.steamid === r.steamid ? { ...p, deep } : p)) }));
-      store.set({ history: hist });
-      send('match', hist.find((x) => (x.shareCode || String(x.at)) === key));
-      return deep;
-    } finally { scrutinizing.delete(job); }
-  });
+  h('scrutinize', (key, steamid) => doScrutinize(key, steamid));
   h('setOverride', async (id, tier, note) => {
     const r = await api.setOverride(id, tier, note);
     if (tier === 'approved') {   // update already-scanned matches too
@@ -648,6 +735,8 @@ app.whenReady().then(() => {
   setTimeout(startBackfill, 20000);
   setTimeout(backfillStats, 90000);
   setTimeout(refreshSquad, 15000);
+  setTimeout(rescrutinize, 5 * 60000);
+  setInterval(rescrutinize, 60 * 60000);
   setTimeout(syncHistoryStats, 3 * 60000);
   setInterval(syncHistoryStats, 12 * 3600000);
   setTimeout(remindReports, 30000);

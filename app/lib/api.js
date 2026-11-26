@@ -46,6 +46,7 @@ class Api {
   demoJob(id) { return this.req('GET', '/demos/' + id); }
   uploadStats(body) { return this.req('POST', '/stats', body); }
   uploadStatsBatch(matches) { return this.req('POST', '/stats', { matches }); }
+  withdrawFlag(shareCode, steamid) { return this.req('POST', '/flags/withdraw', { shareCode, steamid }); }
   squad(names, map) { return this.req('POST', '/squad', { names, map }); }
   stats(days = 0) { return this.req('GET', '/stats?days=' + Number(days || 0)); }
 }

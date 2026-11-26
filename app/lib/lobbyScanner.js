@@ -56,6 +56,22 @@ function extractConnectedNames(text) {
   return names;
 }
 
+/** In-game chat from console.log: " [ALL] Major Ram\u200e [DEAD]: text". Returns { scope, name, text } or null. */
+function parseChat(raw) {
+  const line = raw.replace(/^\uFEFF?\d{2}\/\d{2} \d{2}:\d{2}:\d{2}\s+/, '');
+  const m = line.match(/^\s*\[(ALL|T|CT|TEAM|SPEC)\]\s+(.+?)\u200e?(?:\s\[DEAD\])?\s*:\s(.*)$/) || line.match(/^\s*\((Counter-Terrorist|Terrorist|Spectator)\)\s+(.+?)\u200e?(?:\s\[DEAD\])?\s*:\s(.*)$/);
+  return m ? { scope: m[1], name: m[2].replace(/\u200e/g, '').trim(), text: m[3].trim() } : null;
+}
+// someone in the match calling out a cheater (several languages)
+const ACCUSE = /(^|[^a-z])(wh|walls?|wall(ing|er|ers)|wall ?hack\w*|hack(s|er|ers|ing)?|cheat(s|er|ers|ing)?|aim ?bot\w*|spin ?bot\w*|trigger ?bot\w*|esp|radar|vac|report(ed|ing)?|bann?ed|toggl\w*|closet)([^a-z]|$)|читер|читы|аимбот|cheto|chiter|xiter|hacker/i;
+const isAccusation = (text) => ACCUSE.test(text || '');
+/** Names from the lobby that a chat message points at (whole name, or a 4+ letter word that starts a name). */
+function namesIn(text, names) {
+  const t = (text || '').toLowerCase();
+  const words = t.split(/[^\p{L}\p{N}_]+/u).filter((w) => w.length >= 4);
+  return names.filter((n) => { const l = n.toLowerCase(); return (l.length >= 3 && t.includes(l)) || words.some((w) => l.startsWith(w)); });
+}
+
 /** The game server a console line says we're joining ("Host activate: Remote Connect (<server>)"), else null.
  *  This is the start of a match. Rejoining the SAME server (crash, disconnect) is not a new match. */
 function matchServer(raw) {
@@ -122,6 +138,11 @@ class LobbyScanner extends EventEmitter {
         this.server = null; this.map = null; this.current.clear(); this.names.clear();
         this.emit('matchEnd');
         continue;
+      }
+      const chat = parseChat(line);
+      if (chat && this.server && isAccusation(chat.text)) {
+        const everyone = [...this.names, this.ownName].filter(Boolean);
+        this.emit('accusation', { by: chat.name, text: chat.text.slice(0, 140), scope: chat.scope, targets: namesIn(chat.text, everyone).filter((n) => n !== chat.name), server: this.server, map: this.map || null, at: Date.now() });
       }
       const mp = stripPrefix(line).match(/^Map: "([^"]+)"/);
       if (mp && mp[1] !== '<empty>' && mp[1] !== this.map) { this.map = mp[1]; this.emit('map', this.map); }
@@ -205,4 +226,4 @@ class LobbyScanner extends EventEmitter {
   scanNow() { this.tail(); this.pollNetcon(); }
 }
 
-module.exports = { LobbyScanner, extractSteamIds, extractStatusNames, extractConnectedNames, isMatchStart, findConsoleLog, stripPrefix };
+module.exports = { parseChat, isAccusation, namesIn, LobbyScanner, extractSteamIds, extractStatusNames, extractConnectedNames, isMatchStart, findConsoleLog, stripPrefix };

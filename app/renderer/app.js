@@ -94,6 +94,9 @@ function renderSquad(l) {
 
 function renderLobby(l) {
   const names = l.names || [];
+  const reps = l.reports || [];
+  $('#lobbyReports').replaceChildren(...(reps.length ? [el('h4', {}, 'Called out in chat this match'),
+    ...reps.map((r) => el('div', { class: 'muted small' }, `${r.by}${r.round ? ' (round ' + r.round + ')' : ''}: "${r.text}" → ${r.targets && r.targets.length ? r.targets.join(', ') : 'whoever killed them'} will be scrutinized automatically after the match`))] : []));
   const conf = (l.live && l.live.confirmed) || [];
   $('#lobbyStatus').textContent = (names.length ? "Reading players from CS2's console log." : 'Waiting for a match… players appear as they join.') + ((l.lastStatus && l.lastStatus.count >= 8) ? '' : ' CS2 only logs players who join after you — hold TAB once in the match to list everyone (turn on "Full lobby list" in Settings).')
     + (l.lastStatus ? ` Last player list: ${new Date(l.lastStatus.at).toLocaleTimeString()} (${l.lastStatus.count} player${l.lastStatus.count === 1 ? '' : 's'}).` : '')
@@ -255,6 +258,7 @@ function renderMatches() {
       const notes = [];
       if (c && c.tier !== 'approved') notes.push(acctWhy);
       if (r.flagged || r.signals.length) notes.push(scanWhy);
+      if (deep && deep.report) notes.push(`Called out in chat by ${deep.report.by}${deep.report.round ? ' (round ' + deep.report.round + ')' : ''}`);
       if (deep && deep.flagged) notes.push('Scrutinized: ' + deep.signals.map((x) => `${x.name}: ${x.value}`).join(' · '));
       return el('div', { class: 'pline ' + worst + (r.steamid === me?.steamid ? ' me' : '') },
         el('div', { class: 'pmain' },
@@ -472,6 +476,7 @@ async function loadFlags() {
         el('p', {}, `${prettyMap(f.map)}${f.extra && f.extra.score ? ` · ${f.extra.score.own}–${f.extra.score.opp} (their team ${f.extra.score.own > f.extra.score.opp ? 'won' : f.extra.score.own < f.extra.score.opp ? 'lost' : 'drew'})` : ''} · rounds to watch: ${(f.rounds || []).join(', ') || '?'}`),
         el('ul', {}, (f.signals || []).map((s) => el('li', {}, `${s.name}: ${s.value}`))),
         el('p', { class: 'muted' }, `${f.extra && f.extra.scrutinized ? 'Scrutinized by' : 'Flagged by'} ${f.reporter_name || f.reporter}`),
+        f.extra && f.extra.reported ? el('p', { class: 'muted' }, `Called out in chat — ${f.extra.reported}`) : null,
         watchButtons(f.extra && f.extra.moments, { demoUrl: f.extra && f.extra.demoUrl, key: f.share_code, steamid: f.steamid }),
         el('p', { class: 'muted' }, `Votes: ${f.cheater_votes} cheater · ${f.clean_votes} not cheating — decided early if 5+ vote and 2/3 agree, otherwise the majority decides on day 4.${f.my_vote ? ' You voted: ' + (f.my_vote === 'cheater' ? 'cheater' : 'not cheating') + '.' : ''}`),
         el('div', { class: 'row' },

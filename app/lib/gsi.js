@@ -49,7 +49,8 @@ function summarize(body) {
   const activity = body && body.player && body.player.activity; // menu | playing | textinput
   const phase = map ? map.phase : null;                          // warmup | live | intermission | gameover
   const inMatch = !!map && phase !== 'gameover';
-  return { inMatch, phase, activity: activity || null, map: map ? map.name : null };
+  const round = map && Number.isFinite(Number(map.round)) ? Number(map.round) + 1 : null;   // map.round = rounds already played
+  return { inMatch, phase, activity: activity || null, map: map ? map.name : null, round };
 }
 
 class GameState extends EventEmitter {

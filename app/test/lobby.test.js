@@ -63,3 +63,11 @@ test('rejoining the same server keeps the player list', () => {
   clearTimeout(l.rejoinTimer);
   assert.deepEqual(last, ['Rook']);
 });
+
+test('chat call-outs from console.log', () => {
+  const { parseChat, isAccusation, namesIn } = require('../lib/lobbyScanner');
+  assert.deepEqual(parseChat('11/26 16:10:45  [ALL] Major Ram‎ [DEAD]: hahahahaq'), { scope: 'ALL', name: 'Major Ram', text: 'hahahahaq' });
+  for (const t of ['he is walling', 'WH', 'report sanga', 'aimbot lol', 'cheater', 'esp on']) assert.ok(isAccusation(t), t);
+  for (const t of ['hahaha', 'nice shot', 'especially', 'vacation', 'gg wp']) assert.ok(!isAccusation(t), t);
+  assert.deepEqual(namesIn('report sanga he is walling', ['sAngA`', 'Xinhai', 'cfab']), ['sAngA`']);
+});
