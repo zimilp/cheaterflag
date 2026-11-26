@@ -429,6 +429,8 @@ async function watchDemo({ demoPath, demoUrl, key, tick, steamid }) {
 // ---------- automatic updates: check at start and every hour; install as soon as it's downloaded,
 // unless a match is being played (then right after it ends). The app restarts itself in the background.
 let updateStatus = '';
+let updateReady = null;   // version downloaded and waiting to install
+let installNow = null;
 function setupAutoUpdate() {
   if (!app.isPackaged) return;
   let au;
@@ -446,7 +448,8 @@ function setupAutoUpdate() {
   au.on('update-not-available', () => status('Up to date.'));
   au.on('update-available', (i) => status(`Downloading version ${i.version}…`));
   au.on('download-progress', (p) => status(`Downloading update… ${Math.round(p.percent)}%`));
-  au.on('update-downloaded', (i) => { ready = true; status(`Version ${i.version} downloaded — installing${gsi && gsi.quietTime() ? ' after your match' : ''}.`); install(); });
+  installNow = () => { app.isQuitting = true; au.quitAndInstall(true, true); };
+  au.on('update-downloaded', (i) => { ready = true; updateReady = i.version; send('updateReady', i.version); status(`Version ${i.version} downloaded — installing${gsi && gsi.quietTime() ? ' after your match' : ''}.`); install(); });
   au.on('error', (e) => status('Update problem: ' + (e && e.message ? e.message.split('\n')[0] : e) + ' — you can always install the latest version from the download link.'));
   if (gsi) gsi.on('change', (next) => { if (!next.inMatch) install(); });
   const check = () => au.checkForUpdates().catch(() => {});
@@ -481,6 +484,8 @@ function registerIpc() {
     store.set(patch); return true;
   });
   h('updateStatus', async () => updateStatus);
+  h('updateReady', async () => updateReady);
+  h('installUpdate', async () => { if (!installNow || !updateReady) throw new Error('No update is waiting.'); installNow(); return true; });
   h('checkUpdates', async () => { try { await require('electron-updater').autoUpdater.checkForUpdates(); } catch (e) { return e.message; } return true; });
   h('gameState', async () => (gsi ? gsi.state : null));
   h('autoStatus', async () => ({ backfill: backfillStatus, lastCheck: store.get('lastMatchCheck') || null, connected: !!(store.get('authCode') && store.get('lastShareCode')) }));

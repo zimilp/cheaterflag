@@ -458,6 +458,15 @@ cf.on('match', () => refreshHistory());
 cf.on('log', log);
 cf.on('goto', (t) => showTab(t));
 cf.on('update', (t) => { $('#updStatus').textContent = '· ' + t; });
+// update waiting: offer to install right away (otherwise it installs after the match)
+function showUpdateReady(v) {
+  if (!v) return;
+  $('#updBarMsg').textContent = `CheaterFlag ${v} is ready. It installs by itself after your match — or install it now (takes about 10 seconds; the app reopens, CS2 keeps running).`;
+  $('#updBar').classList.remove('hidden');
+}
+cf.on('updateReady', showUpdateReady);
+cf.updateReady().then(showUpdateReady).catch(() => {});
+$('#btnInstallNow').addEventListener('click', (e) => { e.target.disabled = true; e.target.textContent = 'Installing…'; cf.installUpdate().catch((err) => { e.target.disabled = false; e.target.textContent = 'Install now'; fail(err); }); });
 $('#btnCheckUpd').addEventListener('click', () => { $('#updStatus').textContent = '· Checking…'; cf.checkUpdates().then((r) => { if (r !== true) $('#updStatus').textContent = '· ' + r; }).catch(fail); });
 cf.updateStatus().then((t) => { if (t) $('#updStatus').textContent = '· ' + t; }).catch(() => {});
 cf.on('watch', (m) => { showWatchBar(true); $('#watchMsg').textContent = m; });
