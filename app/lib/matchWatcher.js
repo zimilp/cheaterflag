@@ -117,7 +117,11 @@ class MatchWatcher extends EventEmitter {
     const result = { shareCode: key, map: scan.mapName, teams: scan.teams || [], playedAt, at: Date.now(), results: scan.results, checks, keptDemo: kept, local: ownFile, demoUrl };
     this.addAwards(result);
     this.shareStats(result);
-    this.store.set({ history: [result, ...(this.store.get('history') || [])].slice(0, 100) });
+    // a re-scan replaces the old entry for the same match (same key, or same Valve match id)
+    const idOf = (h) => [h.demoUrl, h.keptDemo, h.shareCode].map((x) => (String(x || '').match(/(\d{15,30})_\d{6,12}/) || [])[1]).find(Boolean) || null;
+    const myId = idOf(result);
+    const others = (this.store.get('history') || []).filter((h) => h.shareCode !== result.shareCode && !(myId && idOf(h) === myId));
+    this.store.set({ history: [result, ...others].slice(0, 150) });
     this.emit('match', result);
     return result;
   }

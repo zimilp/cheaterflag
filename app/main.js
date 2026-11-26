@@ -356,7 +356,7 @@ function startBackfill() {
         }
       }
     } catch (_) {}
-    store.set({ scannerVersion: SCANNER_VERSION, history: [] });
+    store.set({ scannerVersion: SCANNER_VERSION });   // keep history: re-scanned matches replace their old entry, older ones stay as they were
   }
   items.push(
     ...(store.get('backfillUrls') || []).filter((url) => ![...keptIds].some((id) => url.includes(id))).map((url) => ({ type: 'url', url })),

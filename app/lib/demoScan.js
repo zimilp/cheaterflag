@@ -629,5 +629,5 @@ function deepScan(demoPath, steamid, T = DEEP) {
   return deepAnalyze({ players, deaths, roundStarts, samples, killWindows, plants, beginPlants, fires, jumps, fireRows }, steamid, T);
 }
 
-const SCANNER_VERSION = 5;
+const SCANNER_VERSION = 6;   // 6: "how did I die", players who left early, highlights, economy
 module.exports = { addLeavers, bombReads, mechanicsChecks, analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION };
