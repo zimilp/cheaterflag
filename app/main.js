@@ -267,6 +267,13 @@ async function backfillStats() {
   if (statsFillRunning || !watcher || !store.get('token')) return;
   statsFillRunning = true;
   try {
+    // award rules changed: recalculate saved matches (no download needed) and share the new awards
+    const { AWARDS_VERSION } = require('./lib/matchWatcher');
+    const hist0 = store.get('history') || [];
+    const redo = hist0.filter((m) => m.statsV && m.awardsV !== AWARDS_VERSION && (m.results || []).some((r) => r.stats));
+    for (const m of redo) { watcher.addAwards(m); watcher.shareStats(m); }
+    if (redo.length) { store.set({ history: hist0 }); send('match', redo[0]); }
+
     const todo = (store.get('history') || []).filter((m) => !m.statsV && !m.statsTried && m.results && m.results.length
       && ((m.keptDemo && fs.existsSync(m.keptDemo)) || (m.demoUrl && Date.now() - (m.playedAt || m.at) < 5 * 86400000)));
     for (const item of todo) {

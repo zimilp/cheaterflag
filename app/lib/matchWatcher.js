@@ -11,6 +11,7 @@ const retention = require('./retention');
 const { SCANNER_VERSION, applyScrutiny } = require('./demoScan');
 const { awards } = require('./matchStats');
 
+const AWARDS_VERSION = 2;   // bump when award rules change: saved matches get their awards recalculated
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 class MatchWatcher extends EventEmitter {
@@ -127,6 +128,7 @@ class MatchWatcher extends EventEmitter {
     const aw = awards(stats, members);
     for (const r of result.results) { if (members.has(r.steamid) && r.stats) r.awards = aw.get(r.steamid) || []; else { delete r.awards; } }
     result.statsV = 1;
+    result.awardsV = AWARDS_VERSION;
   }
 
   /** Send members' stats for the Stats tab (the service keeps members only). Needs Valve's match id. */
@@ -212,4 +214,4 @@ class MatchWatcher extends EventEmitter {
   }
 }
 
-module.exports = { MatchWatcher };
+module.exports = { AWARDS_VERSION, MatchWatcher };

@@ -46,4 +46,5 @@ test('fun stats: entry, clutch, utility, team flash, weapons', () => {
   const aw = awards(s, new Set(['a1', 'a2', 'a3']));
   assert.ok(aw.get('a3').includes('clutcher'));
   assert.ok(!aw.has('b1'));                     // only members get awards
+  for (const id of ['a1', 'a2', 'a3']) assert.ok(aw.get(id) && aw.get(id).length >= 1, id + ' has an award');
 });

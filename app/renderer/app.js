@@ -205,7 +205,8 @@ function renderMatches() {
 // ---------- Stats tab (members only)
 const AWARD_LABEL = { support: '🧠 Support', clutcher: '🦾 Clutcher', entry: '🚪 Entry fragger',
   firstdeath: '💀 First to die', trader: '🤝 Trader', teamflash: '😎 Team flasher', bomb: '💣 Bomb boy', headshot: '🎯 Headshot machine',
-  awp: '🔭 AWP god', ace: '🔥 Ace', marathon: '🏃 Marathon runner' };
+  awp: '🔭 AWP god', ace: '🔥 Ace', marathon: '🏃 Marathon runner', topfrag: '🏆 Top fragger', assists: '🤲 Assist king',
+  damage: '💥 Damage dealer', survivor: '🛡️ Survivor', wallbang: '🧱 Wallbanger', teamplayer: '🎖️ Team player' };
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const per = (a, b, d = 1) => (b ? Math.round((a / b) * 10 ** d) / 10 ** d : 0);
 const z = (o, k) => (o && o[k]) || 0;

@@ -179,7 +179,13 @@ const AWARDS = [
   { key: 'awp', label: '🔭 AWP god', score: (s) => s.awpKills, min: 6 },
   { key: 'ace', label: '🔥 Ace', score: (s) => s.aces, min: 1 },
   { key: 'marathon', label: '🏃 Marathon runner', score: (s) => (s.rounds ? s.distance / s.rounds : 0), min: 1, needs: 2 },
+  { key: 'topfrag', label: '🏆 Top fragger', score: (s) => s.kills, min: 1, needs: 2 },
+  { key: 'assists', label: '🤲 Assist king', score: (s) => s.assists, min: 4 },
+  { key: 'damage', label: '💥 Damage dealer', score: (s) => (s.rounds ? s.damage / s.rounds : 0), min: 1, needs: 2 },
+  { key: 'survivor', label: '🛡️ Survivor', score: (s) => s.saves, min: 3 },
+  { key: 'wallbang', label: '🧱 Wallbanger', score: (s) => s.wallbangs, min: 2 },
 ];
+const FALLBACK = { key: 'teamplayer', label: '🎖️ Team player' };
 /** stats: Map/obj steamid -> stats, members: Set of member steamids. Returns Map steamid -> [award keys]. */
 function awards(stats, members) {
   const out = new Map();
@@ -191,7 +197,19 @@ function awards(stats, members) {
     if (best < a.min) continue;
     for (const id of who) out.set(id, [...(out.get(id) || []), a.key]);
   }
+  // everyone gets at least one: the award where they came closest to the best member in this match
+  for (const [id, s] of entries) {
+    if (out.has(id)) continue;
+    let pick = null, bestRatio = 0;
+    for (const a of AWARDS) {
+      if (a.key === 'firstdeath' || a.key === 'teamflash') continue;      // no teasing-only awards here
+      const v = a.score(s);
+      const top = Math.max(...entries.map(([, o]) => a.score(o)));
+      if (v > 0 && top > 0 && v / top > bestRatio) { bestRatio = v / top; pick = a.key; }
+    }
+    out.set(id, [pick || FALLBACK.key]);
+  }
   return out;
 }
 
-module.exports = { computeStats, parseStats, awards, AWARDS, FIELDS };
+module.exports = { computeStats, parseStats, awards, AWARDS, FALLBACK, FIELDS };
