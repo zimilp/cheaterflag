@@ -4,18 +4,11 @@
 
 const sid = (v) => (v == null ? null : String(v));
 const TRADE_TICKS = 5 * 64;           // a kill within 5 s of a teammate's death avenges it
-const BAIT_RANGE = 900;               // units: "was right there" when a teammate died
 const UTIL = /hegrenade|inferno|molotov|incgrenade/;
 const KNIFE = /knife|bayonet/;
-// buy prices of guns worth dropping (CS2, Nov 2026)
-const PRICES = {
-  'AK-47': 2700, 'M4A4': 3100, 'M4A1-S': 2900, 'AWP': 4750, 'Galil AR': 1800, 'FAMAS': 2050, 'SG 553': 3000, 'AUG': 3300,
-  'SSG 08': 1700, 'MAC-10': 1050, 'MP9': 1250, 'MP7': 1500, 'MP5-SD': 1500, 'UMP-45': 1200, 'P90': 2350, 'PP-Bizon': 1400,
-  'Nova': 1050, 'XM1014': 2000, 'MAG-7': 1300, 'Sawed-Off': 1100, 'M249': 5200, 'Negev': 1700, 'G3SG1': 5000, 'SCAR-20': 5000,
-};
 const FIELDS = ['rounds', 'kills', 'deaths', 'assists', 'headshots', 'damage', 'utilDamage', 'flashAssists', 'enemiesFlashed', 'teamFlashSecs',
-  'entryKills', 'firstDeaths', 'trades', 'baits', 'clutchWins', 'clutchAttempts', 'bestClutch', 'saves', 'plants', 'defuses', 'ninjaDefuses',
-  'k3', 'k4', 'aces', 'awpKills', 'knifeKills', 'wallbangs', 'smokeKills', 'blindKills', 'noscopes', 'teamKills', 'dropsGiven', 'distance'];
+  'entryKills', 'firstDeaths', 'trades', 'clutchWins', 'clutchAttempts', 'bestClutch', 'saves', 'plants', 'defuses', 'ninjaDefuses',
+  'k3', 'k4', 'aces', 'awpKills', 'knifeKills', 'wallbangs', 'smokeKills', 'blindKills', 'noscopes', 'teamKills', 'distance'];
 
 const blank = () => Object.fromEntries(FIELDS.map((f) => [f, 0]));
 const dist2d = (a, b) => Math.hypot(a.X - b.X, a.Y - b.Y);
@@ -24,7 +17,7 @@ const teamNum = (w) => (w == null ? null : typeof w === 'number' ? w : /CT/i.tes
 /**
  * data: { players:[{steamid,name}], deaths, hurts, blinds, roundStarts (freeze-end ticks), roundEnds:[{tick,winner}],
  *         plants:[{tick,user_steamid}], defuses:[{tick,user_steamid}], samples:[{tick,steamid,X,Y,is_alive,team_num}],
- *         buys:[{tick,steamid,balance,inventory,team_num}] (two snapshots per round: start of buy time, end of buy time) }
+ * }
  * Returns Map steamid -> stats object (numbers only).
  */
 function computeStats(data) {
@@ -94,20 +87,6 @@ function computeStats(data) {
           if (sid(e.user_steamid) === k && r.team.get(sid(e.attacker_steamid)) === vt) { if (st(e.attacker_steamid)) st(e.attacker_steamid).trades += 1; traded = true; break; }
         }
       }
-      // "popcorn seat": the closest living teammate was right there, didn't trade, and stayed alive
-      if (enemyKill && !traded) {
-        const snap = nearest(d.tick), vp = snap && snap.get(v);
-        let best = null, bestD = BAIT_RANGE;
-        for (const [id, isAlive] of alive) {
-          if (!isAlive || id === v || r.team.get(id) !== vt) continue;
-          const p = snap && snap.get(id);
-          if (!vp || !p) continue;
-          const dd = dist2d(vp, p);
-          if (dd < bestD) { bestD = dd; best = id; }
-        }
-        const diedSoon = best && deaths.some((e) => sid(e.user_steamid) === best && e.tick > d.tick && e.tick - d.tick <= TRADE_TICKS);
-        if (best && !diedSoon) st(best).baits += 1;
-      }
       // clutch: last one alive on a team
       for (const t of [2, 3]) {
         if (clutch.has(t)) continue;
@@ -163,34 +142,6 @@ function computeStats(data) {
       last.set(id, r);
     }
   }
-  // ---- drops (best guess): a teammate gets a gun without paying, and someone on the team paid for it
-  const buys = tickOf(data.buys);
-  const buyTicks = [...buys.keys()].sort((a, b) => a - b);
-  for (let i = 0; i + 1 < buyTicks.length; i += 2) {
-    const before = buys.get(buyTicks[i]), after = buys.get(buyTicks[i + 1]);
-    const guns = (row) => new Set((row && row.inventory || []).filter((n) => PRICES[n]));
-    const spent = new Map(), extra = new Map();
-    for (const [id, r1] of after) {
-      const r0 = before.get(id);
-      if (!r0 || !st(id)) continue;
-      const pay = (Number(r0.balance) || 0) - (Number(r1.balance) || 0);
-      const own = [...guns(r1)].filter((g) => !guns(r0).has(g));
-      spent.set(id, { team: r1.team_num, pay, own });
-    }
-    for (const [id, s] of spent) {
-      for (const g of s.own) {
-        if (s.pay >= PRICES[g] * 0.8) continue;                  // they bought it themselves
-        let giver = null, best = 0;
-        for (const [gid, gs] of spent) {
-          if (gid === id || gs.team !== s.team) continue;
-          const ownCost = gs.own.reduce((x, n) => x + (PRICES[n] || 0), 0);
-          const left = gs.pay - ownCost - (extra.get(gid) || 0);
-          if (left >= PRICES[g] * 0.9 && left > best) { best = left; giver = gid; }
-        }
-        if (giver) { st(giver).dropsGiven += 1; extra.set(giver, (extra.get(giver) || 0) + PRICES[g]); }
-      }
-    }
-  }
   for (const s of S.values()) { s.teamFlashSecs = Math.round(s.teamFlashSecs * 10) / 10; s.distance = Math.round(s.distance); }
   return S;
 }
@@ -209,17 +160,8 @@ function parseStats(demoPath, base = {}) {
     const list = []; for (let t = 0; t <= lastTick; t += 8) list.push(t);
     samples = dp.parseTicks(demoPath, ['X', 'Y', 'is_alive', 'team_num'], list);
   }
-  // buy time: from the start of each round to 20 s after freeze time ends
-  const rs = ev('round_start').map((e) => e.tick).sort((a, b) => a - b);
-  const buyList = [];
-  for (const fe of [...roundStarts].sort((a, b) => a - b)) {
-    const s = [...rs].reverse().find((t) => t < fe);
-    if (s != null) buyList.push(s + 8, fe + 20 * 64);
-  }
-  let buys = [];
-  try { if (buyList.length) buys = dp.parseTicks(demoPath, ['balance', 'inventory', 'team_num'], buyList); } catch (_) {}
   return computeStats({
-    players, deaths, roundStarts, roundEnds, samples, buys,
+    players, deaths, roundStarts, roundEnds, samples,
     hurts: ev('player_hurt'), blinds: ev('player_blind'), plants: ev('bomb_planted'), defuses: ev('bomb_defused'),
   });
 }
@@ -227,8 +169,6 @@ function parseStats(demoPath, base = {}) {
 // ---- awards among members in one match
 const AWARDS = [
   { key: 'support', label: '🧠 Support', score: (s) => s.flashAssists * 2 + s.enemiesFlashed * 0.5 + s.utilDamage / 25, min: 4 },
-  { key: 'sugar', label: '🎁 Sugar Daddy', score: (s) => s.dropsGiven, min: 2 },
-  { key: 'popcorn', label: '🍿 Popcorn seat', score: (s) => s.baits, min: 3 },   // watched a teammate go down up close and lived
   { key: 'clutcher', label: '🦾 Clutcher', score: (s) => s.clutchWins * 10 + s.bestClutch, min: 10 },
   { key: 'entry', label: '🚪 Entry fragger', score: (s) => s.entryKills, min: 3 },
   { key: 'firstdeath', label: '💀 First to die', score: (s) => s.firstDeaths, min: 4 },
@@ -254,4 +194,4 @@ function awards(stats, members) {
   return out;
 }
 
-module.exports = { computeStats, parseStats, awards, AWARDS, FIELDS, PRICES };
+module.exports = { computeStats, parseStats, awards, AWARDS, FIELDS };

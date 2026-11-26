@@ -22,19 +22,14 @@ function round() {
     hurts: [{ tick: 900, attacker_steamid: 'a1', user_steamid: 'b1', dmg_health: 40, weapon: 'hegrenade' }, { tick: 950, attacker_steamid: 'a2', user_steamid: 'a1', dmg_health: 10, weapon: 'glock' }],
     blinds: [{ tick: 800, attacker_steamid: 'a2', user_steamid: 'a1', blind_duration: 3.2 }, { tick: 800, attacker_steamid: 'b2', user_steamid: 'a1', blind_duration: 2 }],
     plants: [], defuses: [],
-    buys: [
-      { tick: 100, steamid: 'a1', balance: 6000, inventory: ['Glock-18'], team_num: 2 }, { tick: 100, steamid: 'a2', balance: 800, inventory: ['Glock-18'], team_num: 2 },
-      { tick: 1780, steamid: 'a1', balance: 600, inventory: ['Glock-18', 'AK-47'], team_num: 2 }, { tick: 1780, steamid: 'a2', balance: 800, inventory: ['Glock-18', 'AK-47'], team_num: 2 },
-    ],
   };
 }
 
-test('fun stats: entry, bait, clutch, trade-less, drops, utility, team flash', () => {
+test('fun stats: entry, clutch, utility, team flash, weapons', () => {
   const s = computeStats(round());
   const g = (id) => s.get(id);
   assert.equal(g('b1').entryKills, 1);
   assert.equal(g('a1').firstDeaths, 1);
-  assert.equal(g('a2').baits, 1);               // a2 was 100 units away and didn't trade (popcorn seat)
   assert.equal(g('a3').clutchWins, 1);
   assert.equal(g('a3').bestClutch, 1);
   assert.equal(g('a3').kills, 2);
@@ -46,7 +41,6 @@ test('fun stats: entry, bait, clutch, trade-less, drops, utility, team flash', (
   assert.equal(g('a2').damage, 0);              // team damage doesn't count
   assert.equal(g('a2').teamFlashSecs, 3.2);
   assert.equal(g('b2').enemiesFlashed, 1);
-  assert.equal(g('a1').dropsGiven, 1);          // a1 paid 5400 for two AKs, a2 got one for free
   assert.equal(g('b1').saves + g('b2').saves, 0);
   assert.ok(g('a3').distance > 0);
   const aw = awards(s, new Set(['a1', 'a2', 'a3']));

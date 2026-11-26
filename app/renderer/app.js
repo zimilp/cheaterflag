@@ -160,7 +160,7 @@ function renderMatches() {
         el('div', { class: 'pmain' },
           el('a', { href: '#', class: 'pname', title: 'Open Steam profile', onclick: (ev) => { ev.preventDefault(); cf.openProfile(r.steamid); } }, r.name),
           r.steamid === me?.steamid ? el('span', { class: 'you' }, 'you') : null,
-          (r.awards || []).length ? el('span', { class: 'pawards', title: r.awards.map((k) => AWARD_LABEL[k] || k).join(' · ') }, r.awards.map((k) => (AWARD_LABEL[k] || '🏅').split(' ')[0]).join('')) : null,
+          (r.awards || []).some((k) => AWARD_LABEL[k]) ? el('span', { class: 'pawards', title: r.awards.filter((k) => AWARD_LABEL[k]).map((k) => AWARD_LABEL[k]).join(' · ') }, r.awards.filter((k) => AWARD_LABEL[k]).map((k) => AWARD_LABEL[k].split(' ')[0]).join('')) : null,
           el('span', { class: 'pbadges' }, el('span', { class: 'plabel' }, 'Acct'), acct, el('span', { class: 'plabel' }, 'Play'), game),
           el('span', { class: 'pk' }, el('b', {}, r.kills), ' K')),
         el('div', { class: 'pnote' + (notes.length ? '' : ' clean'), title: notes.length ? notes.join(' · ') : acctWhy },
@@ -203,7 +203,7 @@ function renderMatches() {
 }
 
 // ---------- Stats tab (members only)
-const AWARD_LABEL = { support: '🧠 Support', sugar: '🎁 Sugar Daddy', popcorn: '🍿 Popcorn seat', baiter: '🍿 Popcorn seat', clutcher: '🦾 Clutcher', entry: '🚪 Entry fragger',
+const AWARD_LABEL = { support: '🧠 Support', clutcher: '🦾 Clutcher', entry: '🚪 Entry fragger',
   firstdeath: '💀 First to die', trader: '🤝 Trader', teamflash: '😎 Team flasher', bomb: '💣 Bomb boy', headshot: '🎯 Headshot machine',
   awp: '🔭 AWP god', ace: '🔥 Ace', marathon: '🏃 Marathon runner' };
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -224,8 +224,6 @@ const STAT_COLS = [
   { key: 'clutch', label: 'Clutch %', rate: (p) => pct(z(p.demo, 'clutchWins'), z(p.demo, 'clutchAttempts')), total: (p) => z(p.demo, 'clutchWins'), totalLabel: 'Clutches won',
     fmt: (v, p, totals) => (totals ? `${v}${p.bestClutch ? ` (best 1v${p.bestClutch})` : ''}` : `${v}% (${z(p.demo, 'clutchWins')}/${z(p.demo, 'clutchAttempts')})`), tip: 'Rounds won as the last one alive' },
   { key: 'trade', label: 'Trade %', rate: (p) => pct(z(p.demo, 'trades'), z(p.demo, 'rounds')), total: (p) => z(p.demo, 'trades'), totalLabel: 'Trades', tip: 'Rounds where they avenged a teammate within 5 s' },
-  { key: 'popcorn', label: '🍿 Popcorn %', rate: (p) => pct(z(p.demo, 'baits'), z(p.demo, 'rounds')), total: (p) => z(p.demo, 'baits'), totalLabel: '🍿 Popcorn', tip: 'Front-row seat: watched a teammate go down right next to them and lived to tell the tale (best guess)' },
-  { key: 'drops', label: 'Drop %', rate: (p) => pct(z(p.demo, 'dropsGiven'), z(p.demo, 'rounds')), total: (p) => z(p.demo, 'dropsGiven'), totalLabel: 'Drops', tip: 'Rounds where they bought a gun for a teammate (best guess)' },
   { key: 'flash', label: 'Flash assists / match', rate: (p) => per(z(p.demo, 'flashAssists'), p.demoMatches), total: (p) => z(p.demo, 'flashAssists'), totalLabel: 'Flash assists' },
   { key: 'util', label: 'Utility ADR', rate: (p) => per(z(p.full, 'utilDamage'), z(p.full, 'rounds')), total: (p) => z(p.full, 'utilDamage'), totalLabel: 'Util dmg', tip: 'HE + molotov damage per round' },
   { key: 'teamflash', label: 'Team flash s / match', rate: (p) => per(z(p.demo, 'teamFlashSecs'), p.demoMatches), total: (p) => Math.round(z(p.demo, 'teamFlashSecs')), totalLabel: 'Team flash (s)', tip: 'Seconds of teammates flashed' },
@@ -239,8 +237,8 @@ const STAT_COLS = [
   { key: 'knife', label: 'Knife kills', rate: (p) => z(p.full, 'knifeKills') },
   { key: 'km', label: 'Km / match', rate: (p) => per(z(p.demo, 'distance') * 0.0254 / 1000, p.demoMatches), total: (p) => Math.round(z(p.demo, 'distance') * 0.0254 / 100) / 10, totalLabel: 'Km run', tip: '1 unit ≈ 1 inch' },
 ];
-const PCT_KEYS = new Set(['win', 'hs', 'mvp', 'open', 'trade', 'popcorn', 'drops', 'bomb', 'multi', 'awp', 'wallbang', 'save']);
-function topAward(p) { let k = null, n = 0; for (const [a, c] of Object.entries(p.awards || {})) if (c > n) { k = a; n = c; } return { k, n }; }
+const PCT_KEYS = new Set(['win', 'hs', 'mvp', 'open', 'trade', 'bomb', 'multi', 'awp', 'wallbang', 'save']);
+function topAward(p) { let k = null, n = 0; for (const [a, c] of Object.entries(p.awards || {})) if (AWARD_LABEL[a] && c > n) { k = a; n = c; } return { k, n }; }
 let statRows = [], statSort = { key: 'win', dir: -1 };
 async function loadStats() {
   const box = $('#statTable');
@@ -266,7 +264,7 @@ function renderStats() {
   const body = rows.map((p) => el('tr', { class: p.steamid === me?.steamid ? 'me' : '' }, STAT_COLS.map((c) => {
     const v = val(c, p);
     const text = c.fmt ? c.fmt(v, p, totals) : (!totals && PCT_KEYS.has(c.key) ? v + '%' : v);
-    const title = c.key === 'award' ? Object.entries(p.awards || {}).map(([k, n]) => `${AWARD_LABEL[k] || k} ×${n}`).join('\n')
+    const title = c.key === 'award' ? Object.entries(p.awards || {}).filter(([k]) => AWARD_LABEL[k]).map(([k, n]) => `${AWARD_LABEL[k] || k} ×${n}`).join('\n')
       : c.key === 'matches' ? `${p.demoMatches || 0} with a demo (all fun stats) · ${p.faceitMatches || 0} FACEIT · ${p.historyMatches || 0} from Steam match history (wins, K/D, HS %, MVPs)` : '';
     return el('td', { title }, text);
   })));
