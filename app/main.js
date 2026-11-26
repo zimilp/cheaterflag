@@ -42,13 +42,13 @@ function flushHeld() {
 
 // ---------- demo scanning in a utility process
 let scanSeq = 0; const pending = new Map();
-function runScan(demoPath, deep = null) {
+function runScan(demoPath, deep = null, statsOnly = false) {
   if (!scanProc) {
     scanProc = utilityProcess.fork(path.join(__dirname, 'scanWorker.js'));
     scanProc.on('message', (m) => { const p = pending.get(m.id); if (!p) return; pending.delete(m.id); m.ok ? p.resolve(m.scan) : p.reject(new Error(m.error)); });
     scanProc.on('exit', () => { scanProc = null; for (const p of pending.values()) p.reject(new Error('Scanner stopped')); pending.clear(); });
   }
-  return new Promise((resolve, reject) => { const id = ++scanSeq; pending.set(id, { resolve, reject }); scanProc.postMessage({ id, demoPath, deep }); });
+  return new Promise((resolve, reject) => { const id = ++scanSeq; pending.set(id, { resolve, reject }); scanProc.postMessage({ id, demoPath, deep, statsOnly }); });
 }
 
 // ---------- window + tray
@@ -223,6 +223,44 @@ function localDemoFiles() {
     try { for (const f of fs.readdirSync(d)) if (/\.dem$/i.test(f)) out.push(path.join(d, f)); } catch (_) {}
   }
   return out;
+}
+
+// Fun stats for matches scanned before the Stats tab existed: use demos still on this PC, or
+// download ones Valve still has (about 5 days). Runs once per match, quietly, between other scans.
+let statsFillRunning = false;
+async function backfillStats() {
+  if (statsFillRunning || !watcher || !store.get('token')) return;
+  statsFillRunning = true;
+  try {
+    const todo = (store.get('history') || []).filter((m) => !m.statsV && !m.statsTried && m.results && m.results.length
+      && ((m.keptDemo && fs.existsSync(m.keptDemo)) || (m.demoUrl && Date.now() - (m.playedAt || m.at) < 5 * 86400000)));
+    for (const item of todo) {
+      while (watcher.busy) await new Promise((r) => setTimeout(r, 5000));
+      watcher.busy = true;
+      let demo = item.keptDemo && fs.existsSync(item.keptDemo) ? item.keptDemo : null, temp = false;
+      try {
+        if (!demo) { demo = await watcher.download(item.demoUrl, 'stats_' + item.shareCode); temp = true; }
+        const stats = await runScan(demo, null, true);
+        const key = item.shareCode || String(item.at);
+        const hist = store.get('history') || [];
+        const m = hist.find((x) => (x.shareCode || String(x.at)) === key);
+        if (m) {
+          for (const r of m.results) if (stats[r.steamid]) r.stats = stats[r.steamid];
+          watcher.addAwards(m);
+          store.set({ history: hist });
+          watcher.shareStats(m);
+          send('match', m);
+        }
+      } catch (e) {
+        const hist = store.get('history') || [];
+        const m = hist.find((x) => x.shareCode === item.shareCode && x.at === item.at);
+        if (m) { m.statsTried = true; store.set({ history: hist }); }
+      } finally {
+        if (temp && demo) { try { fs.unlinkSync(demo); } catch (_) {} }
+        watcher.busy = false;
+      }
+    }
+  } finally { statsFillRunning = false; }
 }
 
 let backfillRunning = false;
@@ -416,6 +454,7 @@ function registerIpc() {
   h('addBlacklist', (e) => api.addBlacklist(e));
   h('removeBlacklist', (id) => api.removeBlacklist(id));
   h('flags', (s) => api.flags(s));
+  h('stats', (days) => api.stats(days));
   h('reviewFlag', (id, action) => api.reviewFlag(id, action));
   h('members', () => api.members());
   h('setMember', (id, patch) => api.setMember(id, patch));
@@ -534,6 +573,7 @@ app.whenReady().then(() => {
   setInterval(autoConfigure, 60 * 1000); // retries until Steam is closed once
   startServices();
   setTimeout(startBackfill, 20000);
+  setTimeout(backfillStats, 90000);
   setTimeout(remindReports, 30000);
   setTimeout(remindVotes, 60000);
   setupAutoUpdate();

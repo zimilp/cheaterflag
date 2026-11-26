@@ -13,6 +13,7 @@
       <button data-tab="setup" class="active">Setup</button>
       <button data-tab="lobby">Lobby</button>
       <button data-tab="matches">My matches</button>
+      <button data-tab="stats">Stats</button>
       <button data-tab="review">Review</button>
       <button data-tab="blacklist">Blacklist</button>
       <button data-tab="members" class="admin-only hidden">Members</button>
@@ -78,6 +79,15 @@
         <h3>Your stats</h3>
         <div id="stats" class="muted"></div>
       </div>
+    </section>
+
+    <section id="tab-stats" class="tab hidden">
+      <div class="row between">
+        <h2>Squad stats</h2>
+        <select id="statDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="0">All time</option></select>
+      </div>
+      <p class="muted">CheaterFlag members only, from every scanned match a member played. Click a column to sort. Drops and Baits are best guesses; everything else is counted exactly from the demo.</p>
+      <div id="statTable"></div>
     </section>
 
     <section id="tab-review" class="tab hidden">

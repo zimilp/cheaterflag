@@ -268,6 +268,11 @@ function scanDemo(demoPath, T = THRESHOLDS) {
   const samples = ticks(sampleList);
   const killWindows = ticks([...windowSet]);
   const results = analyze({ players, deaths, roundStarts, samples, killWindows }, T);
+  // fun stats for the Stats tab (never allowed to break detection)
+  try {
+    const stats = require('./matchStats').parseStats(demoPath, { players, deaths, roundStarts, samples });
+    for (const r of results) if (stats.has(r.steamid)) r.stats = stats.get(r.steamid);
+  } catch (_) {}
   const teams = finalScore(dp, demoPath);
   for (const r of results) {
     const own = teams.find((t) => t.players.includes(r.steamid));

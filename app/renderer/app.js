@@ -21,7 +21,7 @@ function showTab(name) {
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab').forEach((s) => s.classList.toggle('hidden', s.id !== 'tab-' + name));
   setTimeout(() => showWatchBar(), 0);
-  ({ setup: refreshSetup, matches: () => { refreshHistory(); refreshAuto(); }, review: loadFlags, blacklist: loadBlacklist, members: loadMembers })[name]?.();
+  ({ setup: refreshSetup, matches: () => { refreshHistory(); refreshAuto(); }, review: loadFlags, blacklist: loadBlacklist, members: loadMembers, stats: loadStats })[name]?.();
 }
 document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -159,6 +159,7 @@ function renderMatches() {
         el('div', { class: 'pmain' },
           el('a', { href: '#', class: 'pname', title: 'Open Steam profile', onclick: (ev) => { ev.preventDefault(); cf.openProfile(r.steamid); } }, r.name),
           r.steamid === me?.steamid ? el('span', { class: 'you' }, 'you') : null,
+          (r.awards || []).length ? el('span', { class: 'pawards', title: r.awards.map((k) => AWARD_LABEL[k] || k).join(' · ') }, r.awards.map((k) => (AWARD_LABEL[k] || '🏅').split(' ')[0]).join('')) : null,
           el('span', { class: 'pbadges' }, el('span', { class: 'plabel' }, 'Acct'), acct, el('span', { class: 'plabel' }, 'Play'), game),
           el('span', { class: 'pk' }, el('b', {}, r.kills), ' K')),
         el('div', { class: 'pnote' + (notes.length ? '' : ' clean'), title: notes.length ? notes.join(' · ') : acctWhy },
@@ -199,6 +200,65 @@ function renderMatches() {
   const withFlag = hist.filter((m) => m.results.some((r) => r.flagged) || (m.checks || []).some((c) => c.tier === 'rejected')).length;
   $('#stats').textContent = hist.length ? `${hist.length} matches scanned · ${withFlag} had a flagged or banned player (${Math.round((withFlag / hist.length) * 100)}%).` : 'No data yet.';
 }
+
+// ---------- Stats tab (members only)
+const AWARD_LABEL = { support: '🧠 Support', sugar: '🎁 Sugar Daddy', baiter: '🐀 Baiter', clutcher: '🦾 Clutcher', entry: '🚪 Entry fragger',
+  firstdeath: '💀 First to die', trader: '🤝 Trader', teamflash: '😎 Team flasher', bomb: '💣 Bomb boy', headshot: '🎯 Headshot machine',
+  awp: '🔭 AWP god', ace: '🔥 Ace', marathon: '🏃 Marathon runner' };
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+const per = (a, b, d = 1) => (b ? Math.round((a / b) * 10 ** d) / 10 ** d : 0);
+const STAT_COLS = [
+  { key: 'name', label: 'Member', get: (p) => p.name || p.steamid, text: true },
+  { key: 'award', label: 'Top award', get: (p) => topAward(p).n, text: false, fmt: (v, p) => (topAward(p).k ? `${AWARD_LABEL[topAward(p).k] || topAward(p).k} ×${topAward(p).n}` : '—') },
+  { key: 'matches', label: 'Matches', get: (p) => p.matches },
+  { key: 'kd', label: 'K/D', get: (p) => per(p.kills, Math.max(1, p.deaths), 2), tip: 'Kills per death' },
+  { key: 'adr', label: 'ADR', get: (p) => per(p.damage, p.rounds), tip: 'Average damage per round' },
+  { key: 'hs', label: 'HS %', get: (p) => pct(p.headshots, p.kills) },
+  { key: 'entryKills', label: 'Entries', get: (p) => p.entryKills || 0, tip: 'First kill of the round' },
+  { key: 'firstDeaths', label: 'First deaths', get: (p) => p.firstDeaths || 0 },
+  { key: 'clutchWins', label: 'Clutches', get: (p) => p.clutchWins || 0, tip: 'Rounds won as the last one alive (best: 1vX in tooltip)', fmt: (v, p) => `${v}${v && p.bestClutch ? ` (best 1v${p.bestClutch})` : ''}` },
+  { key: 'trades', label: 'Trades', get: (p) => p.trades || 0, tip: 'Avenged a teammate within 5 s' },
+  { key: 'baits', label: 'Baits', get: (p) => p.baits || 0, tip: 'A teammate died right next to them and they didn\'t trade (best guess)' },
+  { key: 'dropsGiven', label: 'Drops', get: (p) => p.dropsGiven || 0, tip: 'Guns bought for teammates (best guess)' },
+  { key: 'flashAssists', label: 'Flash assists', get: (p) => p.flashAssists || 0 },
+  { key: 'utilDamage', label: 'Util dmg', get: (p) => p.utilDamage || 0, tip: 'HE + molotov damage' },
+  { key: 'teamFlashSecs', label: 'Team flash (s)', get: (p) => Math.round(p.teamFlashSecs || 0), tip: 'Seconds of teammates flashed' },
+  { key: 'bomb', label: 'Plants / defuses', get: (p) => (p.plants || 0) + (p.defuses || 0), fmt: (v, p) => `${p.plants || 0} / ${p.defuses || 0}` },
+  { key: 'multi', label: '3K+', get: (p) => (p.k3 || 0) + (p.k4 || 0) + (p.aces || 0), tip: 'Rounds with 3+ kills (4Ks and aces in tooltip)', fmt: (v, p) => `${v}${p.aces ? ` · ${p.aces} ace` : ''}` },
+  { key: 'awpKills', label: 'AWP kills', get: (p) => p.awpKills || 0 },
+  { key: 'knifeKills', label: 'Knife', get: (p) => p.knifeKills || 0 },
+  { key: 'wallbangs', label: 'Wallbangs', get: (p) => p.wallbangs || 0 },
+  { key: 'saves', label: 'Saves', get: (p) => p.saves || 0, tip: 'Survived a lost round' },
+  { key: 'km', label: 'Km run', get: (p) => Math.round((p.distance || 0) * 0.0254 / 100) / 10, tip: '1 unit ≈ 1 inch' },
+];
+function topAward(p) { let k = null, n = 0; for (const [a, c] of Object.entries(p.awards || {})) if (c > n) { k = a; n = c; } return { k, n }; }
+let statRows = [], statSort = { key: 'kd', dir: -1 };
+async function loadStats() {
+  const box = $('#statTable');
+  box.textContent = 'Loading…';
+  try {
+    statRows = (await cf.stats(Number($('#statDays').value))).players || [];
+    renderStats();
+  } catch (e) { box.textContent = e.message; }
+}
+function renderStats() {
+  const box = $('#statTable');
+  if (!statRows.length) { box.replaceChildren(el('p', { class: 'muted' }, 'No stats yet. They fill in as members play — every match a member plays counts once, even if several of you were in it.')); return; }
+  const col = STAT_COLS.find((c) => c.key === statSort.key) || STAT_COLS[2];
+  const rows = [...statRows].sort((a, b) => {
+    const x = col.get(a), y = col.get(b);
+    return (col.text ? String(x).localeCompare(String(y)) : (x - y)) * statSort.dir;
+  });
+  const head = el('tr', {}, STAT_COLS.map((c) => el('th', { class: 'sortable' + (c.key === statSort.key ? ' sorted' : ''), title: c.tip || 'Sort by ' + c.label,
+    onclick: () => { statSort = { key: c.key, dir: statSort.key === c.key ? -statSort.dir : (c.text ? 1 : -1) }; renderStats(); } },
+    c.label, c.key === statSort.key ? (statSort.dir < 0 ? ' ▼' : ' ▲') : '')));
+  const body = rows.map((p) => el('tr', { class: p.steamid === me?.steamid ? 'me' : '' }, STAT_COLS.map((c) => {
+    const v = c.get(p);
+    return el('td', { title: c.key === 'award' ? Object.entries(p.awards || {}).map(([k, n]) => `${AWARD_LABEL[k] || k} ×${n}`).join('\n') : '' }, c.fmt ? c.fmt(v, p) : v);
+  })));
+  box.replaceChildren(el('div', { class: 'tablewrap' }, el('table', { class: 'stats' }, el('thead', {}, head), el('tbody', {}, body))));
+}
+$('#statDays').addEventListener('change', loadStats);
 
 // Scrutinize: a deeper check of one player; anything suspicious goes to Review
 const scrutinyBusy = new Set();

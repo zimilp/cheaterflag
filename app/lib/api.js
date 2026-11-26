@@ -44,6 +44,8 @@ class Api {
   nextMatch(authCode, knownCode) { return this.req('POST', '/matches/next', { authCode, knownCode }); }
   requestDemo(shareCode) { return this.req('POST', '/demos/request', { shareCode }); }
   demoJob(id) { return this.req('GET', '/demos/' + id); }
+  uploadStats(body) { return this.req('POST', '/stats', body); }
+  stats(days = 0) { return this.req('GET', '/stats?days=' + Number(days || 0)); }
 }
 
 module.exports = { Api };

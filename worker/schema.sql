@@ -90,3 +90,13 @@ CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v INTEGER
 );
+
+-- fun stats (Stats tab): one row per member per match
+CREATE TABLE IF NOT EXISTS match_stats (
+  match_id TEXT NOT NULL,
+  steamid TEXT NOT NULL,
+  played_at INTEGER,
+  map TEXT,
+  stats TEXT NOT NULL,
+  PRIMARY KEY (match_id, steamid)
+);

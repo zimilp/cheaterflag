@@ -120,3 +120,15 @@ button:disabled, button:disabled:hover { opacity:.45; cursor:not-allowed; filter
 .pnote button.scrut { white-space:nowrap; flex:none; }
 .pnote button.scrut.ok:disabled { opacity:1; color:var(--ok); border-color:#2f6f4f; background:transparent; cursor:default; }
 .pnote button.scrut.bad:disabled { opacity:1; color:var(--bad); border-color:#6f2f36; background:transparent; cursor:default; }
+
+/* Stats tab */
+.tablewrap { overflow-x:auto; }
+table.stats { font-size:13px; white-space:nowrap; }
+table.stats th, table.stats td { padding:7px 8px; }
+table.stats td:first-child, table.stats th:first-child { position:sticky; left:0; background:var(--bg, #0f1115); z-index:1; }
+table.stats th.sortable { cursor:pointer; user-select:none; position:sticky; top:0; background:var(--panel, #161a22); }
+table.stats th.sortable:hover, table.stats th.sorted { color:var(--text); }
+table.stats td { font-variant-numeric:tabular-nums; }
+table.stats tr.me td { background:#13251b; }
+table.stats tbody tr:hover td { background:#1a1f2a; }
+.pmain .pawards { margin-left:6px; font-size:13px; letter-spacing:1px; cursor:default; }

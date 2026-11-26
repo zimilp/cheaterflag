@@ -9,6 +9,7 @@ const { pipeline } = require('stream/promises');
 const { EventEmitter } = require('events');
 const retention = require('./retention');
 const { SCANNER_VERSION, applyScrutiny } = require('./demoScan');
+const { awards } = require('./matchStats');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -112,9 +113,29 @@ class MatchWatcher extends EventEmitter {
     const kept = ownFile ? demoPath : retention.afterScan(demoPath, this.flaggedDir, flagged.length > 0, this.keepCleanDays() > 0 ? this.cleanDir : null);
     if (!playedAt && ownFile) { try { playedAt = fs.statSync(demoPath).mtimeMs; } catch (_) {} }
     const result = { shareCode: key, map: scan.mapName, teams: scan.teams || [], playedAt, at: Date.now(), results: scan.results, checks, keptDemo: kept, local: ownFile, demoUrl };
+    this.addAwards(result);
+    this.shareStats(result);
     this.store.set({ history: [result, ...(this.store.get('history') || [])].slice(0, 100) });
     this.emit('match', result);
     return result;
+  }
+
+  /** Fun-stats awards, only among CheaterFlag members in this match. */
+  addAwards(result) {
+    const members = new Set((result.checks || []).filter((c) => (c.reasons || []).includes('CheaterFlag member')).map((c) => String(c.steamid)));
+    const stats = new Map(result.results.filter((r) => r.stats).map((r) => [r.steamid, r.stats]));
+    const aw = awards(stats, members);
+    for (const r of result.results) { if (members.has(r.steamid) && r.stats) r.awards = aw.get(r.steamid) || []; else { delete r.awards; } }
+    result.statsV = 1;
+  }
+
+  /** Send members' stats for the Stats tab (the service keeps members only). Needs Valve's match id. */
+  shareStats(result) {
+    const matchId = ((result.demoUrl || '').match(/(\d{6,30})_\d+\.dem/) || [])[1];
+    if (!matchId) return;
+    const players = result.results.filter((r) => r.awards && r.stats).map((r) => ({ steamid: r.steamid, name: r.name, stats: { ...r.stats, awards: r.awards } }));
+    if (!players.length) return;
+    this.api.uploadStats({ matchId, playedAt: result.playedAt || result.at, map: result.map, players }).catch((e) => this.emit('error', e));
   }
 
   /** Scan a .dem file you already have (e.g. downloaded in CS2's Watch tab). Your file is never deleted. */

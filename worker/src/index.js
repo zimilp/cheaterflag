@@ -430,6 +430,48 @@ async function route(req, env) {
     await wakeBot(env);
     return json({ id: j.id });
   }
+  // ---- fun stats (members only)
+  if (p === '/stats' && req.method === 'POST') {
+    if (!/^\d{6,30}$/.test(String(body.matchId || ''))) throw new HttpError(400, 'Invalid match id.');
+    const players = (Array.isArray(body.players) ? body.players : []).slice(0, 12).filter((x) => STEAM64.test(String(x.steamid)));
+    if (!players.length) return json({ saved: 0 });
+    const ph = players.map(() => '?').join(',');
+    const mem = new Set((await env.DB.prepare(`SELECT steamid FROM members WHERE status = 'approved' AND steamid IN (${ph})`).bind(...players.map((x) => String(x.steamid))).all()).results.map((r) => r.steamid));
+    const playedAt = Math.min(Number(body.playedAt) || Date.now(), Date.now());
+    let saved = 0;
+    for (const x of players) {
+      if (!mem.has(String(x.steamid))) continue;
+      const clean = {};
+      for (const [k, v] of Object.entries(x.stats || {})) {
+        if (k === 'awards') clean.awards = (Array.isArray(v) ? v : []).filter((a) => /^[a-z]{2,16}$/.test(a)).slice(0, 15);
+        else if (/^[A-Za-z0-9]{1,24}$/.test(k) && Number.isFinite(Number(v))) clean[k] = Math.max(0, Math.min(Number(v), 1e7));
+      }
+      await env.DB.prepare('INSERT OR REPLACE INTO match_stats (match_id, steamid, played_at, map, stats) VALUES (?,?,?,?,?)')
+        .bind(String(body.matchId), String(x.steamid), playedAt, String(body.map || '').slice(0, 40), JSON.stringify(clean)).run();
+      saved++;
+    }
+    return json({ saved });
+  }
+  if (p === '/stats' && req.method === 'GET') {
+    const days = Number(url.searchParams.get('days')) || 0;
+    const since = days > 0 ? Date.now() - days * 86400000 : 0;
+    const { results } = await env.DB.prepare(`SELECT s.steamid, s.stats, m.name FROM match_stats s JOIN members m ON m.steamid = s.steamid
+      WHERE m.status = 'approved' AND COALESCE(s.played_at, 0) >= ?`).bind(since).all();
+    const by = new Map();
+    for (const r of results) {
+      const st = JSON.parse(r.stats || '{}');
+      const a = by.get(r.steamid) || { steamid: r.steamid, name: r.name, matches: 0, awards: {} };
+      a.matches += 1;
+      for (const [k, v] of Object.entries(st)) {
+        if (k === 'awards') for (const w of v) a.awards[w] = (a.awards[w] || 0) + 1;
+        else if (k === 'bestClutch') a.bestClutch = Math.max(a.bestClutch || 0, v);
+        else a[k] = (a[k] || 0) + v;
+      }
+      by.set(r.steamid, a);
+    }
+    return json({ players: [...by.values()] });
+  }
+
   const dm = p.match(/^\/demos\/(\d+)$/);
   if (dm) {
     const j = await env.DB.prepare('SELECT id, share_code, status, url, error FROM demo_jobs WHERE id = ?').bind(Number(dm[1])).first();
