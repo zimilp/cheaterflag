@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { extractStatusNames, isMatchStart } = require('../lib/lobbyScanner');
+const { extractStatusNames, isMatchStart, extractConnectedNames } = require('../lib/lobbyScanner');
 
 // real CS2 output (Nov 2026), as written to console.log, plus the same over netcon (no timestamp)
 const LOG = `11/26 10:10:55 [Client] players  : 10 humans, 0 bots (0 max) (not hibernating) (unreserved)
@@ -27,4 +27,14 @@ test('status replies do not look like a new match', () => {
   assert.equal(isMatchStart('11/26 08:47:39 [Client] Map: "de_mirage"'), true);
   assert.equal(isMatchStart('11/26 09:23:00 [Client] Map: "<empty>"'), false);
   assert.equal(isMatchStart('11/26 09:42:16 [HostStateManager] Host activate: Remote Connect (=[A:1:4118346762:52697])'), true);
+});
+
+test('names from "connected" lines in console.log (real CS2 output)', () => {
+  const log = `11/26 12:01:10 [HostStateManager] Host activate: Remote Connect (=[A:1:1:2])
+11/26 12:01:11 cfab connected
+11/26 12:01:11 The Dapper Frog connected
+11/26 12:01:12 1/2 Gallon de Chicha connected
+11/26 12:01:12 Client:  Connected [loopback:1] [last packet 0.014 sec ago]
+11/26 12:01:12 [Networking] server @ =[A:1:1:2]:  NetChan Setting Timeout to 30.00 seconds`;
+  assert.deepEqual(extractConnectedNames(log), ['cfab', 'The Dapper Frog', '1/2 Gallon de Chicha']);
 });

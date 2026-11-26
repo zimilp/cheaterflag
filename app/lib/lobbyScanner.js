@@ -43,6 +43,19 @@ function extractStatusNames(text) {
   return names;
 }
 
+/** Names from "<name> connected" lines that CS2 writes to console.log as each player joins (no netcon needed). */
+function extractConnectedNames(text) {
+  const names = [];
+  for (const raw of text.split(/\r?\n/)) {
+    if (!/^\uFEFF?\d{2}\/\d{2} \d{2}:\d{2}:\d{2} /.test(raw) && !/ connected\s*$/.test(raw)) continue;
+    const line = raw.replace(/^\uFEFF?\d{2}\/\d{2} \d{2}:\d{2}:\d{2}\s/, '');
+    if (line.startsWith('[')) continue;                       // engine messages have a [Tag]
+    const m = line.match(/^(.{1,64}) connected\s*$/);
+    if (m && !/^(Client|Server):/.test(m[1])) names.push(m[1]);
+  }
+  return names;
+}
+
 /** True when a console line says a new match/map is loading (reset the lobby list).
  *  Not "loaded spawngroup": that also appears inside every `status` reply. */
 function isMatchStart(raw) {
@@ -75,7 +88,21 @@ class LobbyScanner extends EventEmitter {
 
   start() {
     this.logPath = findConsoleLog(this.cs2Dir);
-    if (this.logPath) this.pos = fs.statSync(this.logPath).size; // only new lines
+    if (this.logPath) {
+      const size = fs.statSync(this.logPath).size;
+      this.pos = size;
+      // started mid-match? read back to the last match start so the lobby isn't empty
+      try {
+        const len = Math.min(size, 2 * 1024 * 1024), buf = Buffer.alloc(len);
+        const fd = fs.openSync(this.logPath, 'r'); fs.readSync(fd, buf, 0, len, size - len); fs.closeSync(fd);
+        const lines = buf.toString('utf8').split(/\r?\n/);
+        let i = lines.length - 1;
+        while (i >= 0 && !isMatchStart(lines[i])) i--;
+        const rest = lines.slice(i + 1);
+        const leftMatch = rest.some((l) => /CSGO_GAME_UI_STATE_\w+ -> CSGO_GAME_UI_STATE_MAINMENU|Map: "<empty>"/.test(l));
+        if (i >= 0 && !leftMatch) setTimeout(() => this.feed(rest.join('\n')), 0);
+      } catch (_) {}
+    }
     let n = 0;
     this.timer = setInterval(() => { this.tail(); if (n++ % 4 === 0) this.pollNetcon(); }, 5000); // status every 20 s
     this.emit('status', { consoleLog: this.logPath, netconPort: this.netconPort });
@@ -97,10 +124,10 @@ class LobbyScanner extends EventEmitter {
       }
     }
     if (fresh.length) this.emit('players', fresh, [...this.current]);
-    const listed = extractStatusNames(text);
-    if (listed.length) this.emit('statusSeen', { at: Date.now(), count: listed.length });
+    const listed = extractStatusNames(text).concat(extractConnectedNames(text));
     const freshNames = listed.filter((n) => n !== this.ownName && !this.names.has(n));
     for (const n of freshNames) this.names.add(n);
+    if (listed.length) this.emit('statusSeen', { at: Date.now(), count: this.names.size + 1 });
     if (freshNames.length) this.emit('names', freshNames, [...this.names]);
   }
 
@@ -123,11 +150,13 @@ class LobbyScanner extends EventEmitter {
     if (this.sock) { this.sock.write('status\n'); return; }
     if (this.connecting) return;
     this.connecting = true;
-    const s = net.connect({ host: '127.0.0.1', port: this.netconPort });
+    const hosts = ['127.0.0.1', '::1', ...Object.values(require('os').networkInterfaces()).flat().filter((x) => x && x.family === 'IPv4' && !x.internal).map((x) => x.address)];
+    this.hostIdx = ((this.hostIdx || 0) + (this.lastErr ? 1 : 0)) % hosts.length;
+    const s = net.connect({ host: hosts[this.hostIdx], port: this.netconPort });
     s.setEncoding('utf8');
-    s.on('connect', () => { this.connecting = false; this.sock = s; this.emit('netcon', true); s.write('status\n'); });
+    s.on('connect', () => { this.connecting = false; this.lastErr = null; this.sock = s; this.emit('netcon', true); s.write('status\n'); });
     s.on('data', (d) => this.feed(d));
-    s.on('error', () => { this.connecting = false; });
+    s.on('error', (e) => { this.connecting = false; this.lastErr = e && e.code; });
     s.on('close', () => { this.connecting = false; if (this.sock === s) { this.sock = null; this.emit('netcon', false); } });
   }
 
@@ -150,4 +179,4 @@ class LobbyScanner extends EventEmitter {
   scanNow() { this.tail(); this.pollNetcon(); }
 }
 
-module.exports = { LobbyScanner, extractSteamIds, extractStatusNames, isMatchStart, findConsoleLog, stripPrefix };
+module.exports = { LobbyScanner, extractSteamIds, extractStatusNames, extractConnectedNames, isMatchStart, findConsoleLog, stripPrefix };

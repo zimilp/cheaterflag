@@ -35,7 +35,7 @@ function toSteam64(input) {
 function renderLobby(l) {
   const names = l.names || [];
   const conf = (l.live && l.live.confirmed) || [];
-  $('#lobbyStatus').textContent = (l.netcon ? 'Connected to CS2.' : 'Waiting for CS2… (it connects automatically when CS2 is open).')
+  $('#lobbyStatus').textContent = (l.netcon ? 'Connected to CS2.' : names.length ? "Reading players from CS2's console log." : 'Waiting for CS2… (players appear as soon as a match loads).')
     + (l.lastStatus ? ` Last player list: ${new Date(l.lastStatus.at).toLocaleTimeString()} (${l.lastStatus.count} player${l.lastStatus.count === 1 ? '' : 's'}).` : '')
     + (l.live ? (l.live.serverKnown ? ' Steam shows your game server, so blacklisted players are confirmed by SteamID.' : ' Steam isn\'t sharing your game server right now, so matches are by name + "playing CS2 now".') : '')
     + (conf.filter((b) => !names.some((n) => n.toLowerCase() === (b.name || '').toLowerCase())).length ? ' Also confirmed in your server: ' + conf.map((b) => b.name).join(', ') + '.' : '');
