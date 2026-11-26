@@ -189,6 +189,92 @@ async function wakeBot(env) {
   } catch (_) { /* the schedule is still a fallback */ }
 }
 
+// ---- fun stats storage. Rows from demos replace anything; history/FACEIT rows never overwrite demo rows.
+const MATCH_ID = /^(\d{6,30}|f-[0-9a-z-]{10,64})$/;
+function cleanStats(raw) {
+  const clean = {};
+  for (const [k, v] of Object.entries(raw || {})) {
+    if (k === 'awards') clean.awards = (Array.isArray(v) ? v : []).filter((a) => /^[a-z]{2,16}$/.test(a)).slice(0, 15);
+    else if (/^[A-Za-z0-9]{1,24}$/.test(k) && Number.isFinite(Number(v))) clean[k] = Math.max(0, Math.min(Number(v), 1e7));
+  }
+  return clean;
+}
+async function saveMatchStats(env, mt) {
+  if (!MATCH_ID.test(String(mt.matchId || ''))) return 0;
+  const players = (Array.isArray(mt.players) ? mt.players : []).slice(0, 12).filter((x) => STEAM64.test(String(x.steamid)));
+  if (!players.length) return 0;
+  const ph = players.map(() => '?').join(',');
+  const mem = new Set((await env.DB.prepare(`SELECT steamid FROM members WHERE status = 'approved' AND steamid IN (${ph})`).bind(...players.map((x) => String(x.steamid))).all()).results.map((r) => r.steamid));
+  const playedAt = Math.min(Number(mt.playedAt) || Date.now(), Date.now());
+  let saved = 0;
+  for (const x of players) {
+    if (!mem.has(String(x.steamid))) continue;
+    const st = cleanStats(x.stats);
+    const verb = st.basic || st.faceit ? 'INSERT OR IGNORE' : 'INSERT OR REPLACE';
+    await env.DB.prepare(`${verb} INTO match_stats (match_id, steamid, played_at, map, stats) VALUES (?,?,?,?,?)`)
+      .bind(String(mt.matchId), String(x.steamid), playedAt, String(mt.map || '').slice(0, 40), JSON.stringify(st)).run();
+    saved++;
+  }
+  return saved;
+}
+
+// ---- FACEIT: members' FACEIT CS2 matches (needs a free FACEIT_API_KEY). A little each run (Workers' 50-request limit).
+async function faceitSync(env) {
+  if (!env.FACEIT_API_KEY) return;
+  const F = 'https://open.faceit.com/data/v4';
+  let calls = 0;
+  const get = async (path) => {
+    if (++calls > 40) throw new Error('budget');
+    const r = await fetch(F + path, { headers: { authorization: 'Bearer ' + env.FACEIT_API_KEY } });
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error('faceit ' + r.status);
+    return r.json();
+  };
+  const num = (v) => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : 0; };
+  try {
+    const { results: mems } = await env.DB.prepare("SELECT steamid FROM members WHERE status = 'approved'").all();
+    const start = (await meta(env, 'faceit_cursor').catch(() => 0)) % Math.max(1, mems.length);
+    const known = new Map();   // FACEIT player id -> Steam id, for members already looked up
+    for (const r of (await env.DB.prepare("SELECT k, v FROM meta WHERE k LIKE 'faceit_id:%'").all()).results) if (r.v && r.v !== '-') known.set(String(r.v), r.k.slice(10));
+    for (let i = 0; i < mems.length; i++) {
+      const sid = mems[(start + i) % mems.length].steamid;
+      await setMeta(env, 'faceit_cursor', (start + i) % mems.length);
+      let fid = await env.DB.prepare("SELECT v FROM meta WHERE k = ?").bind('faceit_id:' + sid).first();
+      if (!fid) {
+        const p = await get(`/players?game=cs2&game_player_id=${sid}`);
+        await env.DB.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').bind('faceit_id:' + sid, p && p.player_id ? p.player_id : '-').run();
+        fid = { v: p && p.player_id ? p.player_id : '-' };
+        if (fid.v !== '-') known.set(fid.v, sid);
+      }
+      if (!fid.v || fid.v === '-') continue;
+      const hist = await get(`/players/${fid.v}/history?game=cs2&limit=20`);
+      for (const it of (hist && hist.items) || []) {
+        const mid = 'f-' + String(it.match_id || '').toLowerCase();
+        if (!MATCH_ID.test(mid)) continue;
+        if (await env.DB.prepare('SELECT 1 FROM match_stats WHERE match_id = ? LIMIT 1').bind(mid).first()) continue;
+        const ms = await get(`/matches/${it.match_id}/stats`);
+        const round = ms && ms.rounds && ms.rounds[0];
+        if (!round) continue;
+        const rounds = num(round.round_stats && round.round_stats.Rounds);
+        const players = [];
+        for (const team of round.teams || []) for (const pl of team.players || []) {
+          const st = pl.player_stats || {};
+          const steam = known.get(String(pl.player_id)) || pl.game_player_id || null;   // members only
+          if (!steam) continue;
+          const won = num(st.Result) === 1;
+          players.push({ steamid: String(steam), name: pl.nickname, stats: {
+            faceit: 1, rounds, kills: num(st.Kills), assists: num(st.Assists), deaths: num(st.Deaths), headshots: num(st.Headshots),
+            mvps: num(st.MVPs), mvpRounds: rounds, damage: num(st.Damage) || Math.round(num(st.ADR) * rounds), k3: num(st['Triple Kills']), k4: num(st['Quadro Kills']),
+            aces: num(st['Penta Kills']), utilDamage: num(st['Utility Damage']), enemiesFlashed: num(st['Enemies Flashed']),
+            entryKills: num(st['First Kills']), awpKills: num(st['Sniper Kills']), knifeKills: num(st['Knife Kills']),
+            clutchWins: num(st['1v1Wins']) + num(st['1v2Wins']), wins: +won, losses: +!won } });
+        }
+        await saveMatchStats(env, { matchId: mid, playedAt: (num(it.finished_at) || num(it.started_at)) * 1000, map: round.round_stats && round.round_stats.Map, players });
+      }
+    }
+  } catch (e) { /* out of budget or FACEIT busy: continue next run */ }
+}
+
 async function route(req, env) {
   const url = new URL(req.url);
   const p = url.pathname.replace(/\/$/, '') || '/';
@@ -432,24 +518,9 @@ async function route(req, env) {
   }
   // ---- fun stats (members only)
   if (p === '/stats' && req.method === 'POST') {
-    if (!/^\d{6,30}$/.test(String(body.matchId || ''))) throw new HttpError(400, 'Invalid match id.');
-    const players = (Array.isArray(body.players) ? body.players : []).slice(0, 12).filter((x) => STEAM64.test(String(x.steamid)));
-    if (!players.length) return json({ saved: 0 });
-    const ph = players.map(() => '?').join(',');
-    const mem = new Set((await env.DB.prepare(`SELECT steamid FROM members WHERE status = 'approved' AND steamid IN (${ph})`).bind(...players.map((x) => String(x.steamid))).all()).results.map((r) => r.steamid));
-    const playedAt = Math.min(Number(body.playedAt) || Date.now(), Date.now());
+    const list = Array.isArray(body.matches) ? body.matches.slice(0, 8) : [body];
     let saved = 0;
-    for (const x of players) {
-      if (!mem.has(String(x.steamid))) continue;
-      const clean = {};
-      for (const [k, v] of Object.entries(x.stats || {})) {
-        if (k === 'awards') clean.awards = (Array.isArray(v) ? v : []).filter((a) => /^[a-z]{2,16}$/.test(a)).slice(0, 15);
-        else if (/^[A-Za-z0-9]{1,24}$/.test(k) && Number.isFinite(Number(v))) clean[k] = Math.max(0, Math.min(Number(v), 1e7));
-      }
-      await env.DB.prepare('INSERT OR REPLACE INTO match_stats (match_id, steamid, played_at, map, stats) VALUES (?,?,?,?,?)')
-        .bind(String(body.matchId), String(x.steamid), playedAt, String(body.map || '').slice(0, 40), JSON.stringify(clean)).run();
-      saved++;
-    }
+    for (const mt of list) saved += await saveMatchStats(env, mt);
     return json({ saved });
   }
   if (p === '/stats' && req.method === 'GET') {
@@ -457,16 +528,21 @@ async function route(req, env) {
     const since = days > 0 ? Date.now() - days * 86400000 : 0;
     const { results } = await env.DB.prepare(`SELECT s.steamid, s.stats, m.name FROM match_stats s JOIN members m ON m.steamid = s.steamid
       WHERE m.status = 'approved' AND COALESCE(s.played_at, 0) >= ?`).bind(since).all();
+    // three sums per member: all matches, matches with full per-round data (demo + FACEIT), demo-only matches
     const by = new Map();
+    const add = (into, st) => { for (const [k, v] of Object.entries(st)) if (k !== 'awards' && k !== 'bestClutch' && typeof v === 'number') into[k] = (into[k] || 0) + v; };
     for (const r of results) {
       const st = JSON.parse(r.stats || '{}');
-      const a = by.get(r.steamid) || { steamid: r.steamid, name: r.name, matches: 0, awards: {} };
+      const a = by.get(r.steamid) || { steamid: r.steamid, name: r.name, matches: 0, demoMatches: 0, fullMatches: 0, faceitMatches: 0, historyMatches: 0, bestClutch: 0, awards: {}, all: {}, full: {}, demo: {} };
       a.matches += 1;
-      for (const [k, v] of Object.entries(st)) {
-        if (k === 'awards') for (const w of v) a.awards[w] = (a.awards[w] || 0) + 1;
-        else if (k === 'bestClutch') a.bestClutch = Math.max(a.bestClutch || 0, v);
-        else a[k] = (a[k] || 0) + v;
+      add(a.all, st);
+      if (st.basic) a.historyMatches += 1;
+      else {
+        add(a.full, st); a.fullMatches += 1;
+        if (st.faceit) a.faceitMatches += 1;
+        else { add(a.demo, st); a.demoMatches += 1; a.bestClutch = Math.max(a.bestClutch, st.bestClutch || 0); }
       }
+      for (const w of st.awards || []) { const key = w === 'baiter' ? 'popcorn' : w; a.awards[key] = (a.awards[key] || 0) + 1; }
       by.set(r.steamid, a);
     }
     return json({ players: [...by.values()] });
@@ -546,5 +622,5 @@ export default {
     try { return await route(req, env); }
     catch (e) { return json({ error: e.message || 'Server error' }, e.status || 500); }
   },
-  async scheduled(_event, env, ctx) { ctx.waitUntil(daily(env)); },
+  async scheduled(event, env, ctx) { ctx.waitUntil(event.cron === '*/15 * * * *' ? faceitSync(env) : daily(env)); },
 };

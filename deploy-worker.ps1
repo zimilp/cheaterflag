@@ -48,6 +48,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Deploy failed - see the message above.' }
 Write-Host "== Storing secrets (values are not shown) ==" -ForegroundColor Cyan
 $secretKeys = @('STEAM_API_KEY', 'SESSION_SECRET', 'BOT_SECRET')
 if ($secrets['GITHUB_DISPATCH_TOKEN']) { $secretKeys += 'GITHUB_DISPATCH_TOKEN' }   # lets the service wake the bot instantly
+if ($secrets['FACEIT_API_KEY']) { $secretKeys += 'FACEIT_API_KEY' }                 # members' FACEIT matches in the Stats tab
 foreach ($k in $secretKeys) {
   $secrets[$k] | npx wrangler secret put $k 2>&1 | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "Could not store $k" }

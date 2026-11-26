@@ -94,7 +94,7 @@ function computeStats(data) {
           if (sid(e.user_steamid) === k && r.team.get(sid(e.attacker_steamid)) === vt) { if (st(e.attacker_steamid)) st(e.attacker_steamid).trades += 1; traded = true; break; }
         }
       }
-      // bait: the closest living teammate was right there, didn't trade, and stayed alive
+      // "popcorn seat": the closest living teammate was right there, didn't trade, and stayed alive
       if (enemyKill && !traded) {
         const snap = nearest(d.tick), vp = snap && snap.get(v);
         let best = null, bestD = BAIT_RANGE;
@@ -228,7 +228,7 @@ function parseStats(demoPath, base = {}) {
 const AWARDS = [
   { key: 'support', label: '🧠 Support', score: (s) => s.flashAssists * 2 + s.enemiesFlashed * 0.5 + s.utilDamage / 25, min: 4 },
   { key: 'sugar', label: '🎁 Sugar Daddy', score: (s) => s.dropsGiven, min: 2 },
-  { key: 'baiter', label: '🐀 Baiter', score: (s) => s.baits, min: 3 },
+  { key: 'popcorn', label: '🍿 Popcorn seat', score: (s) => s.baits, min: 3 },   // watched a teammate go down up close and lived
   { key: 'clutcher', label: '🦾 Clutcher', score: (s) => s.clutchWins * 10 + s.bestClutch, min: 10 },
   { key: 'entry', label: '🚪 Entry fragger', score: (s) => s.entryKills, min: 3 },
   { key: 'firstdeath', label: '💀 First to die', score: (s) => s.firstDeaths, min: 4 },

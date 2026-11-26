@@ -167,6 +167,7 @@ function startServices() {
   lobby.on('netcon', (on) => { lobbyState.netcon = on; send('lobby', lobbyState); });
   lobby.on('matchStart', () => { lobbyState.players = []; lobbyState.checks = {}; lobbyState.names = []; lobbyState.nameHits = {}; send('lobby', lobbyState); });
   lobby.on('names', onLobbyNames);
+  lobby.on('statusSeen', (x) => { lobbyState.lastStatus = x; send('lobby', lobbyState); });
   lobby.on('players', onLobbyPlayers);
   lobby.start();
 
@@ -223,6 +224,40 @@ function localDemoFiles() {
     try { for (const f of fs.readdirSync(d)) if (/\.dem$/i.test(f)) out.push(path.join(d, f)); } catch (_) {}
   }
   return out;
+}
+
+// Basic stats for ALL past matches (years back) from Steam's match history page: K / A / D, MVPs,
+// HS %, score and win/loss for everyone in each match. The service keeps members' rows only.
+let historySyncRunning = false;
+async function syncHistoryStats() {
+  if (historySyncRunning || connecting || !store.get('token') || !store.get('steamid')) return;
+  historySyncRunning = true;
+  try {
+    const since = store.get('historyStatsAt') || 0;
+    const rows = await steamWindow.getMatchHistoryStats(win, store.get('steamid'), { untilMs: since ? since - 86400000 : 0 });
+    if (!rows.length) return;
+    const BASE = 76561197960265728n;
+    const matches = rows.map((m) => {
+      const [s0, s1] = String(m.score || '').split(':').map(Number);
+      const id = (String(m.link || '').match(/(\d{15,30})_\d{6,12}/) || [])[1] || String(Math.floor(m.playedAt / 1000));
+      return {
+        matchId: id, playedAt: m.playedAt, map: String(m.map || '').replace(/^(Premier|Competitive)\s+/i, ''),
+        players: m.players.filter((p) => /^\d+$/.test(p.account)).map((p) => {
+          const own = p.team === 0 ? s0 : s1, opp = p.team === 0 ? s1 : s0;
+          const res = Number.isFinite(own) && Number.isFinite(opp) ? { wins: +(own > opp), losses: +(own < opp), ties: +(own === opp) } : {};
+          return { steamid: (BASE + BigInt(p.account)).toString(), name: p.name,
+            stats: { basic: 1, kills: p.k, assists: p.a, deaths: p.d, mvps: p.mvp, mvpRounds: (s0 + s1) || 0, headshots: Math.round(p.k * p.hsp / 100), score: p.score, ...res } };
+        }),
+      };
+    }).filter((m) => m.players.length);
+    for (let i = 0; i < matches.length; i += 8) {
+      await api.uploadStatsBatch(matches.slice(i, i + 8));
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    store.set({ historyStatsAt: Math.max(since, ...rows.map((r) => r.playedAt)) });
+    send('log', `Stats: added ${matches.length} past match${matches.length === 1 ? '' : 'es'} from your Steam match history.`);
+  } catch (e) { send('log', 'Stats from Steam match history: ' + e.message); }
+  finally { historySyncRunning = false; }
 }
 
 // Fun stats for matches scanned before the Stats tab existed: use demos still on this PC, or
@@ -336,6 +371,7 @@ function connectMatchHistory() {
       send('steamSetup', { step: 'done', msg: 'Connected. (Older matches could not be read: ' + e.message + ')' });
     }
     setTimeout(startBackfill, 3000);
+    setTimeout(syncHistoryStats, 10000);
     return { authCode: !!authCode, shareCode: !!(shareCode || store.get('lastShareCode')) };
   })().finally(() => { connecting = null; });
   return connecting;
@@ -574,6 +610,8 @@ app.whenReady().then(() => {
   startServices();
   setTimeout(startBackfill, 20000);
   setTimeout(backfillStats, 90000);
+  setTimeout(syncHistoryStats, 3 * 60000);
+  setInterval(syncHistoryStats, 12 * 3600000);
   setTimeout(remindReports, 30000);
   setTimeout(remindVotes, 60000);
   setupAutoUpdate();

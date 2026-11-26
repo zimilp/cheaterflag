@@ -34,7 +34,7 @@ test('fun stats: entry, bait, clutch, trade-less, drops, utility, team flash', (
   const g = (id) => s.get(id);
   assert.equal(g('b1').entryKills, 1);
   assert.equal(g('a1').firstDeaths, 1);
-  assert.equal(g('a2').baits, 1);               // a2 was 100 units away and didn't trade
+  assert.equal(g('a2').baits, 1);               // a2 was 100 units away and didn't trade (popcorn seat)
   assert.equal(g('a3').clutchWins, 1);
   assert.equal(g('a3').bestClutch, 1);
   assert.equal(g('a3').kills, 2);

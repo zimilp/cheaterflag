@@ -36,6 +36,7 @@ function renderLobby(l) {
   const names = l.names || [];
   const conf = (l.live && l.live.confirmed) || [];
   $('#lobbyStatus').textContent = (l.netcon ? 'Connected to CS2.' : 'Waiting for CS2… (it connects automatically when CS2 is open).')
+    + (l.lastStatus ? ` Last player list: ${new Date(l.lastStatus.at).toLocaleTimeString()} (${l.lastStatus.count} player${l.lastStatus.count === 1 ? '' : 's'}).` : '')
     + (l.live ? (l.live.serverKnown ? ' Steam shows your game server, so blacklisted players are confirmed by SteamID.' : ' Steam isn\'t sharing your game server right now, so matches are by name + "playing CS2 now".') : '')
     + (conf.filter((b) => !names.some((n) => n.toLowerCase() === (b.name || '').toLowerCase())).length ? ' Also confirmed in your server: ' + conf.map((b) => b.name).join(', ') + '.' : '');
   const rows = $('#lobbyRows'); rows.replaceChildren();
@@ -202,37 +203,45 @@ function renderMatches() {
 }
 
 // ---------- Stats tab (members only)
-const AWARD_LABEL = { support: '🧠 Support', sugar: '🎁 Sugar Daddy', baiter: '🐀 Baiter', clutcher: '🦾 Clutcher', entry: '🚪 Entry fragger',
+const AWARD_LABEL = { support: '🧠 Support', sugar: '🎁 Sugar Daddy', popcorn: '🍿 Popcorn seat', baiter: '🍿 Popcorn seat', clutcher: '🦾 Clutcher', entry: '🚪 Entry fragger',
   firstdeath: '💀 First to die', trader: '🤝 Trader', teamflash: '😎 Team flasher', bomb: '💣 Bomb boy', headshot: '🎯 Headshot machine',
   awp: '🔭 AWP god', ace: '🔥 Ace', marathon: '🏃 Marathon runner' };
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const per = (a, b, d = 1) => (b ? Math.round((a / b) * 10 ** d) / 10 ** d : 0);
+const z = (o, k) => (o && o[k]) || 0;
+// Each column: `rate` (default view: % or per-match) and `total`. Sources: p.all = every match,
+// p.full = matches with per-round data (demo + FACEIT), p.demo = matches with a demo.
 const STAT_COLS = [
-  { key: 'name', label: 'Member', get: (p) => p.name || p.steamid, text: true },
-  { key: 'award', label: 'Top award', get: (p) => topAward(p).n, text: false, fmt: (v, p) => (topAward(p).k ? `${AWARD_LABEL[topAward(p).k] || topAward(p).k} ×${topAward(p).n}` : '—') },
-  { key: 'matches', label: 'Matches', get: (p) => p.matches },
-  { key: 'kd', label: 'K/D', get: (p) => per(p.kills, Math.max(1, p.deaths), 2), tip: 'Kills per death' },
-  { key: 'adr', label: 'ADR', get: (p) => per(p.damage, p.rounds), tip: 'Average damage per round' },
-  { key: 'hs', label: 'HS %', get: (p) => pct(p.headshots, p.kills) },
-  { key: 'entryKills', label: 'Entries', get: (p) => p.entryKills || 0, tip: 'First kill of the round' },
-  { key: 'firstDeaths', label: 'First deaths', get: (p) => p.firstDeaths || 0 },
-  { key: 'clutchWins', label: 'Clutches', get: (p) => p.clutchWins || 0, tip: 'Rounds won as the last one alive (best: 1vX in tooltip)', fmt: (v, p) => `${v}${v && p.bestClutch ? ` (best 1v${p.bestClutch})` : ''}` },
-  { key: 'trades', label: 'Trades', get: (p) => p.trades || 0, tip: 'Avenged a teammate within 5 s' },
-  { key: 'baits', label: 'Baits', get: (p) => p.baits || 0, tip: 'A teammate died right next to them and they didn\'t trade (best guess)' },
-  { key: 'dropsGiven', label: 'Drops', get: (p) => p.dropsGiven || 0, tip: 'Guns bought for teammates (best guess)' },
-  { key: 'flashAssists', label: 'Flash assists', get: (p) => p.flashAssists || 0 },
-  { key: 'utilDamage', label: 'Util dmg', get: (p) => p.utilDamage || 0, tip: 'HE + molotov damage' },
-  { key: 'teamFlashSecs', label: 'Team flash (s)', get: (p) => Math.round(p.teamFlashSecs || 0), tip: 'Seconds of teammates flashed' },
-  { key: 'bomb', label: 'Plants / defuses', get: (p) => (p.plants || 0) + (p.defuses || 0), fmt: (v, p) => `${p.plants || 0} / ${p.defuses || 0}` },
-  { key: 'multi', label: '3K+', get: (p) => (p.k3 || 0) + (p.k4 || 0) + (p.aces || 0), tip: 'Rounds with 3+ kills (4Ks and aces in tooltip)', fmt: (v, p) => `${v}${p.aces ? ` · ${p.aces} ace` : ''}` },
-  { key: 'awpKills', label: 'AWP kills', get: (p) => p.awpKills || 0 },
-  { key: 'knifeKills', label: 'Knife', get: (p) => p.knifeKills || 0 },
-  { key: 'wallbangs', label: 'Wallbangs', get: (p) => p.wallbangs || 0 },
-  { key: 'saves', label: 'Saves', get: (p) => p.saves || 0, tip: 'Survived a lost round' },
-  { key: 'km', label: 'Km run', get: (p) => Math.round((p.distance || 0) * 0.0254 / 100) / 10, tip: '1 unit ≈ 1 inch' },
+  { key: 'name', label: 'Member', rate: (p) => p.name || p.steamid, text: true },
+  { key: 'award', label: 'Top award', rate: (p) => topAward(p).n, fmt: (v, p) => (topAward(p).k ? `${AWARD_LABEL[topAward(p).k] || topAward(p).k} ×${topAward(p).n}` : '—') },
+  { key: 'matches', label: 'Matches', rate: (p) => p.matches, tip: 'Every Premier/Competitive match from Steam history, FACEIT matches, and scanned demos' },
+  { key: 'win', label: 'Win %', rate: (p) => pct(z(p.all, 'wins'), z(p.all, 'wins') + z(p.all, 'losses') + z(p.all, 'ties')), total: (p) => z(p.all, 'wins'), totalLabel: 'Wins' },
+  { key: 'kd', label: 'K/D', rate: (p) => per(z(p.all, 'kills'), Math.max(1, z(p.all, 'deaths')), 2), total: (p) => z(p.all, 'kills'), totalLabel: 'Kills' },
+  { key: 'hs', label: 'HS %', rate: (p) => pct(z(p.all, 'headshots'), z(p.all, 'kills')), total: (p) => z(p.all, 'headshots'), totalLabel: 'Headshots' },
+  { key: 'mvp', label: 'MVP %', rate: (p) => pct(z(p.all, 'mvps'), z(p.all, 'mvpRounds')), total: (p) => z(p.all, 'mvps'), totalLabel: 'MVPs', tip: 'Share of rounds where they were MVP' },
+  { key: 'adr', label: 'ADR', rate: (p) => per(z(p.full, 'damage'), z(p.full, 'rounds')), total: (p) => z(p.full, 'damage'), totalLabel: 'Damage', tip: 'Average damage per round' },
+  { key: 'open', label: 'Opening duels %', rate: (p) => pct(z(p.demo, 'entryKills'), z(p.demo, 'entryKills') + z(p.demo, 'firstDeaths')), total: (p) => z(p.demo, 'entryKills'), totalLabel: 'Entry kills', tip: 'Won the first fight of the round (first kill vs first death)' },
+  { key: 'clutch', label: 'Clutch %', rate: (p) => pct(z(p.demo, 'clutchWins'), z(p.demo, 'clutchAttempts')), total: (p) => z(p.demo, 'clutchWins'), totalLabel: 'Clutches won',
+    fmt: (v, p, totals) => (totals ? `${v}${p.bestClutch ? ` (best 1v${p.bestClutch})` : ''}` : `${v}% (${z(p.demo, 'clutchWins')}/${z(p.demo, 'clutchAttempts')})`), tip: 'Rounds won as the last one alive' },
+  { key: 'trade', label: 'Trade %', rate: (p) => pct(z(p.demo, 'trades'), z(p.demo, 'rounds')), total: (p) => z(p.demo, 'trades'), totalLabel: 'Trades', tip: 'Rounds where they avenged a teammate within 5 s' },
+  { key: 'popcorn', label: '🍿 Popcorn %', rate: (p) => pct(z(p.demo, 'baits'), z(p.demo, 'rounds')), total: (p) => z(p.demo, 'baits'), totalLabel: '🍿 Popcorn', tip: 'Front-row seat: watched a teammate go down right next to them and lived to tell the tale (best guess)' },
+  { key: 'drops', label: 'Drop %', rate: (p) => pct(z(p.demo, 'dropsGiven'), z(p.demo, 'rounds')), total: (p) => z(p.demo, 'dropsGiven'), totalLabel: 'Drops', tip: 'Rounds where they bought a gun for a teammate (best guess)' },
+  { key: 'flash', label: 'Flash assists / match', rate: (p) => per(z(p.demo, 'flashAssists'), p.demoMatches), total: (p) => z(p.demo, 'flashAssists'), totalLabel: 'Flash assists' },
+  { key: 'util', label: 'Utility ADR', rate: (p) => per(z(p.full, 'utilDamage'), z(p.full, 'rounds')), total: (p) => z(p.full, 'utilDamage'), totalLabel: 'Util dmg', tip: 'HE + molotov damage per round' },
+  { key: 'teamflash', label: 'Team flash s / match', rate: (p) => per(z(p.demo, 'teamFlashSecs'), p.demoMatches), total: (p) => Math.round(z(p.demo, 'teamFlashSecs')), totalLabel: 'Team flash (s)', tip: 'Seconds of teammates flashed' },
+  { key: 'bomb', label: 'Plant %', rate: (p) => pct(z(p.demo, 'plants'), z(p.demo, 'rounds')), total: (p) => z(p.demo, 'plants') + z(p.demo, 'defuses'), totalLabel: 'Plants / defuses',
+    fmt: (v, p, totals) => (totals ? `${z(p.demo, 'plants')} / ${z(p.demo, 'defuses')}` : `${v}%`) },
+  { key: 'multi', label: '3K+ %', rate: (p) => pct(z(p.full, 'k3') + z(p.full, 'k4') + z(p.full, 'aces'), z(p.full, 'rounds')), total: (p) => z(p.full, 'k3') + z(p.full, 'k4') + z(p.full, 'aces'), totalLabel: '3K+',
+    fmt: (v, p, totals) => `${v}${totals ? '' : '%'}${z(p.full, 'aces') ? ` · ${z(p.full, 'aces')} ace` : ''}`, tip: 'Rounds with 3 or more kills' },
+  { key: 'awp', label: 'AWP %', rate: (p) => pct(z(p.full, 'awpKills'), z(p.full, 'kills')), total: (p) => z(p.full, 'awpKills'), totalLabel: 'AWP kills', tip: 'Share of kills with the AWP' },
+  { key: 'wallbang', label: 'Wallbang %', rate: (p) => pct(z(p.demo, 'wallbangs'), z(p.demo, 'kills')), total: (p) => z(p.demo, 'wallbangs'), totalLabel: 'Wallbangs' },
+  { key: 'save', label: 'Save %', rate: (p) => pct(z(p.demo, 'saves'), z(p.demo, 'rounds')), total: (p) => z(p.demo, 'saves'), totalLabel: 'Saves', tip: 'Rounds where they survived a lost round' },
+  { key: 'knife', label: 'Knife kills', rate: (p) => z(p.full, 'knifeKills') },
+  { key: 'km', label: 'Km / match', rate: (p) => per(z(p.demo, 'distance') * 0.0254 / 1000, p.demoMatches), total: (p) => Math.round(z(p.demo, 'distance') * 0.0254 / 100) / 10, totalLabel: 'Km run', tip: '1 unit ≈ 1 inch' },
 ];
+const PCT_KEYS = new Set(['win', 'hs', 'mvp', 'open', 'trade', 'popcorn', 'drops', 'bomb', 'multi', 'awp', 'wallbang', 'save']);
 function topAward(p) { let k = null, n = 0; for (const [a, c] of Object.entries(p.awards || {})) if (c > n) { k = a; n = c; } return { k, n }; }
-let statRows = [], statSort = { key: 'kd', dir: -1 };
+let statRows = [], statSort = { key: 'win', dir: -1 };
 async function loadStats() {
   const box = $('#statTable');
   box.textContent = 'Loading…';
@@ -244,20 +253,26 @@ async function loadStats() {
 function renderStats() {
   const box = $('#statTable');
   if (!statRows.length) { box.replaceChildren(el('p', { class: 'muted' }, 'No stats yet. They fill in as members play — every match a member plays counts once, even if several of you were in it.')); return; }
-  const col = STAT_COLS.find((c) => c.key === statSort.key) || STAT_COLS[2];
+  const totals = $('#statTotals').checked;
+  const val = (c, p) => (totals && c.total ? c.total(p) : c.rate(p));
+  const col = STAT_COLS.find((c) => c.key === statSort.key) || STAT_COLS[4];
   const rows = [...statRows].sort((a, b) => {
-    const x = col.get(a), y = col.get(b);
+    const x = val(col, a), y = val(col, b);
     return (col.text ? String(x).localeCompare(String(y)) : (x - y)) * statSort.dir;
   });
   const head = el('tr', {}, STAT_COLS.map((c) => el('th', { class: 'sortable' + (c.key === statSort.key ? ' sorted' : ''), title: c.tip || 'Sort by ' + c.label,
     onclick: () => { statSort = { key: c.key, dir: statSort.key === c.key ? -statSort.dir : (c.text ? 1 : -1) }; renderStats(); } },
-    c.label, c.key === statSort.key ? (statSort.dir < 0 ? ' ▼' : ' ▲') : '')));
+    totals && c.totalLabel ? c.totalLabel : c.label, c.key === statSort.key ? (statSort.dir < 0 ? ' ▼' : ' ▲') : '')));
   const body = rows.map((p) => el('tr', { class: p.steamid === me?.steamid ? 'me' : '' }, STAT_COLS.map((c) => {
-    const v = c.get(p);
-    return el('td', { title: c.key === 'award' ? Object.entries(p.awards || {}).map(([k, n]) => `${AWARD_LABEL[k] || k} ×${n}`).join('\n') : '' }, c.fmt ? c.fmt(v, p) : v);
+    const v = val(c, p);
+    const text = c.fmt ? c.fmt(v, p, totals) : (!totals && PCT_KEYS.has(c.key) ? v + '%' : v);
+    const title = c.key === 'award' ? Object.entries(p.awards || {}).map(([k, n]) => `${AWARD_LABEL[k] || k} ×${n}`).join('\n')
+      : c.key === 'matches' ? `${p.demoMatches || 0} with a demo (all fun stats) · ${p.faceitMatches || 0} FACEIT · ${p.historyMatches || 0} from Steam match history (wins, K/D, HS %, MVPs)` : '';
+    return el('td', { title }, text);
   })));
   box.replaceChildren(el('div', { class: 'tablewrap' }, el('table', { class: 'stats' }, el('thead', {}, head), el('tbody', {}, body))));
 }
+$('#statTotals').addEventListener('change', renderStats);
 $('#statDays').addEventListener('change', loadStats);
 
 // Scrutinize: a deeper check of one player; anything suspicious goes to Review

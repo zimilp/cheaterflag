@@ -131,9 +131,11 @@ class MatchWatcher extends EventEmitter {
 
   /** Send members' stats for the Stats tab (the service keeps members only). Needs Valve's match id. */
   shareStats(result) {
-    const matchId = ((result.demoUrl || '').match(/(\d{6,30})_\d+\.dem/) || [])[1];
+    // Valve's match id: in the demo link (…/730/<id>_<n>.dem) or a CS2 replay file name (match730_<id>_<n>_<server>.dem)
+    const matchId = [result.demoUrl, result.keptDemo, result.shareCode].map((x) => (String(x || '').match(/(\d{15,30})_\d{6,12}/) || [])[1]).find(Boolean);
     if (!matchId) return;
-    const players = result.results.filter((r) => r.awards && r.stats).map((r) => ({ steamid: r.steamid, name: r.name, stats: { ...r.stats, awards: r.awards } }));
+    const wl = (r) => (r.teamScore == null ? {} : { wins: +(r.teamScore > r.oppScore), losses: +(r.teamScore < r.oppScore), ties: +(r.teamScore === r.oppScore) });
+    const players = result.results.filter((r) => r.awards && r.stats).map((r) => ({ steamid: r.steamid, name: r.name, stats: { ...r.stats, ...wl(r), awards: r.awards } }));
     if (!players.length) return;
     this.api.uploadStats({ matchId, playedAt: result.playedAt || result.at, map: result.map, players }).catch((e) => this.emit('error', e));
   }

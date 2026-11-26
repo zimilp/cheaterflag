@@ -146,7 +146,62 @@ async function getOlderMatchLinks(parent, steamid) {
   return [...urls].reverse(); // oldest first
 }
 
+/**
+ * 4) Scoreboards of past Premier/Competitive matches from Steam's match history page (years back,
+ * no demos needed): map, date, final score and each player's K / A / D / MVPs / HS% / score.
+ * Never asks to sign in: returns [] if the Steam window isn't signed in. Stops at `untilMs`.
+ */
+async function getMatchHistoryStats(parent, steamid, { untilMs = 0, maxPages = 150 } = {}) {
+  const w = steamWin(parent);
+  const out = [];
+  for (const tab of ['matchhistorypremier', 'matchhistorycompetitive']) {
+    await load(w, `https://steamcommunity.com/profiles/${steamid}/gcpd/730?tab=${tab}`);
+    const ok = await js(w, `!!document.querySelector('table.csgo_scoreboard_root, #personaldata_elements_container')`).catch(() => false);
+    if (!ok) continue;                         // not signed in (or Steam is down): try again another time
+    const rows = await js(w, `(async () => {
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const dateOf = (t) => { const m = t.match(/(\\d{4}-\\d\\d-\\d\\d) (\\d\\d:\\d\\d:\\d\\d) GMT/); return m ? Date.parse(m[1] + 'T' + m[2] + 'Z') : null; };
+      const oldest = () => { const ds = [...document.querySelectorAll('.csgo_scoreboard_inner_left')].map(e => dateOf(e.textContent)).filter(Boolean); return ds.length ? Math.min(...ds) : Infinity; };
+      let stale = 0, last = 0;
+      for (let i = 0; i < ${Number(maxPages) || 150} && stale < 3 && oldest() > ${Number(untilMs) || 0}; i++) {
+        const b = document.querySelector('#load_more_clickable');
+        if (!b || b.offsetParent === null) break;
+        b.click(); await sleep(2000);
+        const c = document.querySelectorAll('.csgo_scoreboard_inner_left').length; stale = c === last ? stale + 1 : 0; last = c;
+      }
+      const res = [];
+      for (const left of document.querySelectorAll('.csgo_scoreboard_inner_left')) {
+        const row = left.closest('tr'); const right = row && row.querySelector('.csgo_scoreboard_inner_right');
+        if (!right) continue;
+        const cells = [...left.querySelectorAll('td')].map(td => td.textContent.trim());
+        const playedAt = dateOf(left.textContent);
+        if (!playedAt) continue;
+        const link = (left.querySelector('a[href*=".dem"]') || {}).href || null;
+        let head = null, team = 0, score = null; const players = [];
+        for (const tr of right.querySelectorAll('tr')) {
+          const sc = tr.querySelector('.csgo_scoreboard_score');
+          if (sc) { score = sc.textContent.replace(/\\s/g, ''); team = 1; continue; }
+          const ths = [...tr.querySelectorAll('th')];
+          if (ths.length) { head = ths.map(t => t.textContent.trim()); continue; }
+          const a = tr.querySelector('a.linkTitle[data-miniprofile]');
+          if (!a || !head) continue;
+          const td = [...tr.children].map(t => t.textContent.trim());
+          const col = (name) => { const i = head.findIndex(h => h === name); return i >= 0 ? td[i] : ''; };
+          const mvp = col('★'); 
+          players.push({ account: a.dataset.miniprofile, name: a.textContent.trim(), team,
+            k: +col('K') || 0, a: +col('A') || 0, d: +col('D') || 0, mvp: mvp ? (parseInt(mvp.replace(/\\D/g, ''), 10) || 1) : 0,
+            hsp: parseInt(col('HSP'), 10) || 0, score: +col('Score') || 0 });
+        }
+        res.push({ map: cells[0] || '', playedAt, link, score, players });
+      }
+      return res;
+    })()`).catch(() => []);
+    out.push(...rows.map((r) => ({ ...r, mode: tab.includes('premier') ? 'premier' : 'competitive' })));
+  }
+  return out;
+}
+
 function signOutOfSteamWindow() { return session.fromPartition(PARTITION).clearStorageData(); }
 function destroy() { if (win && !win.isDestroyed()) { win.allowClose = true; win.close(); } win = null; }
 
-module.exports = { openIdSignIn, getMatchCodes, getOlderMatchLinks, signOutOfSteamWindow, destroy };
+module.exports = { getMatchHistoryStats, openIdSignIn, getMatchCodes, getOlderMatchLinks, signOutOfSteamWindow, destroy };

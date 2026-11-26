@@ -45,6 +45,7 @@ class Api {
   requestDemo(shareCode) { return this.req('POST', '/demos/request', { shareCode }); }
   demoJob(id) { return this.req('GET', '/demos/' + id); }
   uploadStats(body) { return this.req('POST', '/stats', body); }
+  uploadStatsBatch(matches) { return this.req('POST', '/stats', { matches }); }
   stats(days = 0) { return this.req('GET', '/stats?days=' + Number(days || 0)); }
 }
 

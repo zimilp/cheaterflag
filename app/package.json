@@ -1,11 +1,11 @@
 {
   "name": "cheaterflag",
   "productName": "CheaterFlag",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "CheaterFlag by ehbaah! \u2014 flags known and suspected CS2 cheaters in your matches",
   "author": "ehbaah!",
   "license": "UNLICENSED",
-  "main": "main.js",
+  "main": "bootstrap.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test test/*.test.js",
@@ -25,6 +25,7 @@
     "appId": "com.ehbaah.cheaterflag",
     "productName": "CheaterFlag",
     "files": [
+      "bootstrap.js",
       "main.js",
       "preload.js",
       "scanWorker.js",

@@ -8,6 +8,7 @@
     "deploy": "powershell -ExecutionPolicy Bypass -File deploy-worker.ps1",
     "publish-app": "powershell -ExecutionPolicy Bypass -File publish.ps1",
     "cloud-bot": "powershell -ExecutionPolicy Bypass -File setup-cloud-bot.ps1",
-    "bot-wakeup": "powershell -ExecutionPolicy Bypass -File setup-bot-wakeup.ps1"
+    "bot-wakeup": "powershell -ExecutionPolicy Bypass -File setup-bot-wakeup.ps1",
+    "faceit": "powershell -ExecutionPolicy Bypass -File setup-faceit.ps1"
   }
 }

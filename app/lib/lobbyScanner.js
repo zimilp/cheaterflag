@@ -20,19 +20,36 @@ function extractSteamIds(text) {
   return [...ids];
 }
 
-/** Player names from CS2's `status` output (CS2 no longer prints SteamIDs there). */
+/** Remove what CS2 puts in front of console lines: "11/26 10:10:55 " (console.log) and "[Client] " (channel). */
+function stripPrefix(line) {
+  return line.replace(/^\uFEFF?/, '').replace(/^\d{2}\/\d{2} \d{2}:\d{2}:\d{2}\s+/, '').replace(/^\[[A-Za-z]+\]\s?/, '');
+}
+
+/** Player names from CS2's `status` output (CS2 no longer prints SteamIDs there). Example line:
+ *  "11/26 10:10:55 [Client]    0    00:54    0    0     active 786432 loopback:0 'cfab'" */
 function extractStatusNames(text) {
   const names = [];
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^\s*\d+\s+(?:\d+:\d+|\[\w+\])\s+\d+\s+\d+\s+\w+.*'(.+)'\s*$/);
-    if (m && m[1] && m[1] !== 'unknown') names.push(m[1]);
+  let inPlayers = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = stripPrefix(raw);
+    if (/^-+\s*players\s*-+/i.test(line)) { inPlayers = true; continue; }
+    if (/^#end/.test(line) || /^-{3,}\w/.test(line)) { inPlayers = false; continue; }
+    const m = line.match(/^\s*\d+\s+(?:[\d:]+|\[[^\]]*\]|BOT)\s+[^']*'(.*)'\s*$/);
+    if (m && (inPlayers || /\b(active|spawning|connected|challenging)\b/.test(line))) {
+      const n = m[1];
+      if (n && n !== 'unknown') names.push(n);
+    }
   }
   return names;
 }
 
-/** True when a console line suggests a new match/map has started (reset the lobby list). */
-function isMatchStart(line) {
-  return /(Map:\s|ChangeGameUIState: CSGO_GAME_UI_STATE_LOADINGSCREEN|Host activate|loaded spawngroup)/i.test(line);
+/** True when a console line says a new match/map is loading (reset the lobby list).
+ *  Not "loaded spawngroup": that also appears inside every `status` reply. */
+function isMatchStart(raw) {
+  const line = stripPrefix(raw);
+  return /ChangeGameUIState: \S+ -> CSGO_GAME_UI_STATE_LOADINGSCREEN/.test(line)
+    || /Host activate: Remote Connect/.test(line)
+    || (/^Map: "/.test(line) && !/<empty>/.test(line));
 }
 
 const DEFAULT_CS2_DIRS = [
@@ -80,7 +97,9 @@ class LobbyScanner extends EventEmitter {
       }
     }
     if (fresh.length) this.emit('players', fresh, [...this.current]);
-    const freshNames = extractStatusNames(text).filter((n) => n !== this.ownName && !this.names.has(n));
+    const listed = extractStatusNames(text);
+    if (listed.length) this.emit('statusSeen', { at: Date.now(), count: listed.length });
+    const freshNames = listed.filter((n) => n !== this.ownName && !this.names.has(n));
     for (const n of freshNames) this.names.add(n);
     if (freshNames.length) this.emit('names', freshNames, [...this.names]);
   }
@@ -131,4 +150,4 @@ class LobbyScanner extends EventEmitter {
   scanNow() { this.tail(); this.pollNetcon(); }
 }
 
-module.exports = { LobbyScanner, extractSteamIds, extractStatusNames, isMatchStart, findConsoleLog };
+module.exports = { LobbyScanner, extractSteamIds, extractStatusNames, isMatchStart, findConsoleLog, stripPrefix };

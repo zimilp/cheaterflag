@@ -3,7 +3,7 @@ main = "src/index.js"
 compatibility_date = "2024-11-01"
 
 [triggers]
-crons = ["17 */6 * * *"]   # every 6 h: vote deadlines, expiry, member re-check
+crons = ["17 */6 * * *", "*/15 * * * *"]   # every 6 h: votes, expiry, member re-check; every 15 min: FACEIT stats
 
 [[d1_databases]]
 binding = "DB"
