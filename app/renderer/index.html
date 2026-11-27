@@ -71,9 +71,9 @@
         <div class="row between"><h3>Inhouse 5v5 · balance teams</h3>
           <span class="row"><button id="balOpen">Balance teams</button></span></div>
         <div id="balBody" class="hidden">
-          <p class="muted small">Tick the 10 players. Teams are split on skill (whole history), current form (last 14 days) and ping to the server you pick, with the AWPers split up and one in-game leader per team.</p>
+          <p class="muted small">Everyone around is picked automatically — anyone in a member's Steam party or server, on your server's player list, playing CS2, or with CheaterFlag open. Remove extras with ✕. Teams are split on skill (whole history), current form (last 14 days) and ping to the server you pick, with the AWPers split up and one in-game leader per team.</p>
           <div id="balPlayers" class="balplayers"></div>
-          <div class="row"><input id="balGuest" placeholder="Add a guest (name)" /><button id="balAddGuest">Add</button></div>
+          <div class="row"><button id="balAuto">Refresh who's playing</button><input id="balGuest" placeholder="Add a guest (name)" /><button id="balAddGuest">Add</button></div>
           <div class="row"><label class="inline">Server <select id="balRegion"></select></label><button id="balPing" title="Measure this PC's ping to every region now">Measure my ping</button>
             <span class="rp-sp"></span><span id="balCount" class="muted"></span><button id="balGo">Make teams</button><button id="balAgain" class="hidden" title="Next-fairest split, for variety">Shuffle</button><button id="balCopy" class="hidden">Copy</button></div>
           <div id="balResult"></div>

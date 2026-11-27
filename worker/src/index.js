@@ -413,6 +413,44 @@ async function route(req, env) {
     return json({ map: want || null, squad: squad.map((x) => ({ ...(stats.get(x.steamid) || empty(x.steamid)), onMap: onMap.get(x.steamid) || null, name: x.name, how: x.how })) });
   }
 
+  // who's with you right now (team balancer auto-fill): same server, same party, name seen in your lobby,
+  // playing CS2, or has CheaterFlag open — from Steam presence (public profiles) and the app's own heartbeat
+  if (p === '/presence' && req.method === 'POST') {
+    const names = new Set((body.names || []).map((n) => String(n).trim().toLowerCase()).filter(Boolean).slice(0, 20));
+    const { results: mems } = await env.DB.prepare("SELECT steamid, name, last_seen FROM members WHERE status = 'approved'").all();
+    const live = new Map();
+    for (let i = 0; i < mems.length; i += 100) {
+      const r = await steamApi(env, 'ISteamUser/GetPlayerSummaries/v2/', { steamids: mems.slice(i, i + 100).map((x) => x.steamid).join(',') });
+      if (r.ok) for (const pl of ((await r.json()).response || {}).players || []) live.set(pl.steamid, pl);
+    }
+    const val = (v) => (v && v !== '0' ? v : null);
+    const serverOf = (pl) => val(pl.gameserversteamid) || val(pl.gameserverip), lobbyOf = (pl) => val(pl.lobbysteamid);
+    // members sharing a Steam party or a server with ANY other member (not just you) belong together
+    const groups = new Map();   // 'L:<lobby>' / 'S:<server>' -> [steamid]
+    for (const x of mems) {
+      const pl = live.get(x.steamid) || {};
+      for (const k of [lobbyOf(pl) && 'L:' + lobbyOf(pl), serverOf(pl) && 'S:' + serverOf(pl)].filter(Boolean)) { if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x.steamid); }
+    }
+    const nameOf = (id) => { const pl = live.get(id) || {}; const x = mems.find((y) => y.steamid === id) || {}; return pl.personaname || x.name || id; };
+    const me = live.get(m.steamid) || {};
+    const players = mems.map((x) => {
+      const pl = live.get(x.steamid) || {};
+      const mates = (k) => (groups.get(k) || []).filter((id) => id !== x.steamid);
+      const inServer = serverOf(pl) ? mates('S:' + serverOf(pl)) : [], inParty = lobbyOf(pl) ? mates('L:' + lobbyOf(pl)) : [];
+      const how = x.steamid === m.steamid ? 'you'
+        : serverOf(me) && serverOf(pl) === serverOf(me) ? 'server'
+        : lobbyOf(me) && lobbyOf(pl) === lobbyOf(me) ? 'party'
+        : names.has(String(pl.personaname || '').toLowerCase()) || names.has(String(x.name || '').toLowerCase()) ? 'lobby'
+        : inServer.length ? 'server-other'
+        : inParty.length ? 'party-other'
+        : String(pl.gameid || '') === '730' ? 'playing'
+        : x.last_seen && now() - x.last_seen < 10 * 60 ? 'app' : null;
+      const withWho = (inServer.length ? inServer : inParty).slice(0, 3).map(nameOf);
+      return { steamid: x.steamid, name: pl.personaname || x.name, how, with: withWho };
+    });
+    return json({ players });
+  }
+
   if (p === '/check-names' && req.method === 'POST') {
     const names = [...new Set((body.names || []).map((n) => String(n).trim().toLowerCase()).filter(Boolean))].slice(0, 20);
     if (!names.length) return json({ matches: [] });

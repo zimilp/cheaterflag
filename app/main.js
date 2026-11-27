@@ -736,8 +736,10 @@ function registerIpc() {
   h('flags', (s) => api.flags(s));
   h('stats', (days) => api.stats(days));
   h('balanceData', async () => {
-    const [all, form, pings] = await Promise.all([api.stats(0), api.stats(14), api.pings().catch(() => ({ players: {}, names: {} }))]);
-    return { all: all.players || [], form: form.players || [], pings, mine: store.get('pings') || null };
+    const names = (lobbyState && lobbyState.names) || [];
+    const [all, form, pings, presence] = await Promise.all([api.stats(0), api.stats(14), api.pings().catch(() => ({ players: {}, names: {} })),
+      api.presence(names).catch(() => ({ players: [] }))]);
+    return { all: all.players || [], form: form.players || [], pings, mine: store.get('pings') || null, presence: presence.players || [], lobbyNames: names };
   });
   h('measurePings', () => measurePings(true));
   h('reviewFlag', (id, action) => api.reviewFlag(id, action));

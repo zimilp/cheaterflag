@@ -203,3 +203,11 @@ table.stats tbody tr:hover td { background:#1a1f2a; }
 .balteam h4 { margin-top:0; }
 .balrow { padding:6px 0; border-bottom:1px solid var(--line); }
 .badge.igl { background:#1f3a2c; color:#7ee2a8; margin-left:6px; }
+.balp .how { font-size:10px; padding:1px 6px; border-radius:8px; background:#232a36; color:var(--muted); }
+.balp .how-server, .balp .how-party, .balp .how-lobby, .balp .how-you { background:#1f3a2c; color:#7ee2a8; }
+.balrowlist { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+.balp .kick { background:none; border:none; color:var(--muted); padding:0 2px; cursor:pointer; font-size:12px; }
+.balp .kick:hover { color:var(--bad); }
+.baloff summary { cursor:pointer; margin:4px 0; }
+.baloff .balp { opacity:.75; }
+.balplayers { display:block !important; }

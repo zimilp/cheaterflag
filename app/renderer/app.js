@@ -723,29 +723,50 @@ init().catch(fail);
 const bal = { data: null, picked: new Set(), guests: [], which: 0, last: null };
 try { const s = JSON.parse(localStorage.getItem('balPicked') || '[]'); s.forEach((x) => bal.picked.add(x)); } catch (_) {}
 const balKey = (p) => p.steamid || 'g:' + p.name;
+const HOW_RANK = { you: 0, server: 1, party: 2, lobby: 3, guest: 4, 'server-other': 5, 'party-other': 5, playing: 6, app: 7 };
+const HOW_LABEL = { you: 'you', server: 'same server', party: 'your party', lobby: 'in your lobby', guest: 'guest', 'server-other': 'server', 'party-other': 'party', playing: 'in CS2', app: 'app open' };
+const howText = (p) => (p.how === 'server-other' || p.how === 'party-other') && p.with && p.with.length ? `${HOW_LABEL[p.how]} with ${p.with.join(', ')}` : HOW_LABEL[p.how];
+/** Pick who is with you: same server / party / lobby list first, then guests from the lobby list, then people in CS2. */
+function autoFill() {
+  if (!bal.data) return 0;
+  // names in your server's player list that aren't members join as guests
+  const known = new Set([...balPeople().map((p) => String(p.name).toLowerCase()), ...(bal.data.presence || []).map((x) => String(x.name || '').toLowerCase()), String(me?.name || '').toLowerCase()]);
+  for (const n of bal.data.lobbyNames || []) if (n && !known.has(String(n).toLowerCase()) && !bal.guests.includes(n)) bal.guests.push(n);
+  const ppl = balPeople();
+  // everyone who's around: in any member's party or server, in CS2, or with CheaterFlag open (no limit — remove extras by hand)
+  const pick = ppl.filter((p) => (p.how && p.how !== 'guest') || (p.how === 'guest' && (bal.data.lobbyNames || []).includes(p.name)));
+  if (pick.length < 2) return 0;
+  bal.picked = new Set(pick.map(balKey));
+  return pick.length;
+}
 function balPeople() {
   const form = new Map((bal.data.form || []).map((p) => [p.steamid, p]));
   const pings = (bal.data.pings && bal.data.pings.players) || {};
   const mine = bal.data.mine && bal.data.mine.pops;
   const ppl = (bal.data.all || []).map((p) => ({ ...Balance.profile(p.name, p.steamid, p, form.get(p.steamid) || null, window.Roles),
     ping: pings[p.steamid] || (p.steamid === me?.steamid ? mine : null) || null }));
+  const have = new Set(ppl.map((p) => p.steamid));
+  for (const x of bal.data.presence || []) if (!have.has(x.steamid) && x.how) ppl.push({ ...Balance.profile(x.name, x.steamid, null, null, window.Roles), guest: false, why: 'no stats yet — counted as average', ping: pings[x.steamid] || null });
   for (const g of bal.guests) ppl.push({ ...Balance.profile(g, null, null, null, window.Roles), ping: null });
-  return ppl.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const how = new Map((bal.data.presence || []).map((x) => [x.steamid, x.how]));
+  const withOf = new Map((bal.data.presence || []).map((x) => [x.steamid, x.with || []]));
+  for (const p of ppl) { p.how = p.steamid ? how.get(p.steamid) || null : 'guest'; p.with = p.steamid ? withOf.get(p.steamid) : []; }
+  return ppl.sort((a, b) => (HOW_RANK[a.how] ?? 9) - (HOW_RANK[b.how] ?? 9) || String(a.name).localeCompare(String(b.name)));
 }
 const balPicked = () => balPeople().filter((p) => bal.picked.has(balKey(p)));
 function renderBalPlayers() {
   const box = $('#balPlayers'); box.replaceChildren();
-  for (const p of balPeople()) {
-    const k = balKey(p);
-    box.append(el('label', { class: 'balp' + (bal.picked.has(k) ? ' on' : '') },
-      el('input', { type: 'checkbox', checked: bal.picked.has(k) || null, onchange: (e) => {
-        if (e.target.checked) bal.picked.add(k); else bal.picked.delete(k);
-        try { localStorage.setItem('balPicked', JSON.stringify([...bal.picked].filter((x) => !x.startsWith('g:')))); } catch (_) {}
-        bal.which = 0; renderBalPlayers(); renderRegions();
-      } }),
-      el('span', {}, p.name), el('span', { class: 'muted small' }, p.guest ? ' guest' : ` ${p.skill.toFixed(2)}`)));
-  }
-  $('#balCount').textContent = `${bal.picked.size}/10 picked`;
+  const ppl = balPeople(), save = () => { try { localStorage.setItem('balPicked', JSON.stringify([...bal.picked].filter((x) => !x.startsWith('g:')))); } catch (_) {} };
+  const change = () => { save(); bal.which = 0; renderBalPlayers(); renderRegions(); };
+  const chip = (p, on) => el('span', { class: 'balp' + (on ? ' on' : ''), title: on ? '' : 'Click to add', onclick: on ? null : () => { bal.picked.add(balKey(p)); change(); } },
+    el('span', {}, p.name), el('span', { class: 'muted small' }, p.guest ? ' guest' : ` ${p.skill.toFixed(2)}`),
+    p.how && p.how !== 'guest' ? el('span', { class: 'how how-' + p.how.replace('-other', '') }, howText(p)) : null,
+    on ? el('button', { class: 'kick', title: 'Remove from this match', onclick: (e) => { e.stopPropagation(); bal.picked.delete(balKey(p)); change(); } }, '✕') : null);
+  const on = ppl.filter((p) => bal.picked.has(balKey(p))), off = ppl.filter((p) => !bal.picked.has(balKey(p)));
+  box.append(el('div', { class: 'balrowlist' }, on.length ? on.map((p) => chip(p, true)) : el('span', { class: 'muted small' }, 'Nobody picked yet.')));
+  if (off.length) box.append(el('details', { class: 'baloff' }, el('summary', { class: 'muted small' }, `Not playing (${off.length}) — click to add`), el('div', { class: 'balrowlist' }, off.map((p) => chip(p, false)))));
+  const n = bal.picked.size;
+  $('#balCount').textContent = n === 10 ? '10 players ✓' : n > 10 ? `${n} picked — remove ${n - 10}` : `${n}/10 picked — add ${10 - n}`;
 }
 function renderRegions() {
   const sel = $('#balRegion'), keep = sel.value;
@@ -755,15 +776,17 @@ function renderRegions() {
     ...ranked.slice(0, 15).map((r) => el('option', { value: r.pop }, `${r.name} — worst ${r.worst} ms, avg ${r.avg} ms (${r.known} players)`)));
   if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
 }
-async function loadBalance() {
+async function loadBalance(auto = true) {
   $('#balPlayers').textContent = 'Loading…';
   try { bal.data = await cf.balanceData(); } catch (e) { $('#balPlayers').textContent = e.message; return; }
+  const found = auto ? autoFill() : 0;
+  if (auto) $('#balAuto').title = found ? `${found} found with you` : 'Nobody found with you yet — tick players by hand';
   renderBalPlayers(); renderRegions();
 }
 function makeTeams() {
   const players = balPicked();
   const out = $('#balResult');
-  if (players.length !== 10) { out.replaceChildren(el('p', { class: 'muted' }, `Pick exactly 10 players (${players.length} picked).`)); return; }
+  if (players.length !== 10) { out.replaceChildren(el('p', { class: 'muted' }, players.length > 10 ? `${players.length} players found — remove ${players.length - 10} with ✕ to make two teams of 5.` : `Add ${10 - players.length} more (${players.length} picked).`)); return; }
   const names = (bal.data.pings && bal.data.pings.names) || {};
   const pop = $('#balRegion').value || (Balance.rankRegions(players, names)[0] || {}).pop || null;
   const r = Balance.balance(players, pop, bal.which);
@@ -780,13 +803,14 @@ function makeTeams() {
   $('#balAgain').classList.remove('hidden'); $('#balCopy').classList.remove('hidden');
 }
 $('#balOpen').onclick = async () => { $('#balBody').classList.toggle('hidden'); if (!bal.data) await loadBalance(); };
+$('#balAuto').onclick = async () => { await loadBalance(); };
 $('#balAddGuest').onclick = () => { const n = $('#balGuest').value.trim(); if (!n || !bal.data) return; bal.guests.push(n); bal.picked.add('g:' + n); $('#balGuest').value = ''; renderBalPlayers(); };
 $('#balGo').onclick = () => { bal.which = 0; makeTeams(); };
 $('#balAgain').onclick = () => { bal.which = (bal.which + 1) % 5; makeTeams(); };
 $('#balRegion').onchange = () => { if (bal.last) makeTeams(); };
 $('#balPing').onclick = async (e) => {
   e.target.disabled = true; e.target.textContent = 'Measuring… (about a minute)';
-  try { await cf.measurePings(); await loadBalance(); } catch (err) { log(err.message); }
+  try { await cf.measurePings(); await loadBalance(false); } catch (err) { log(err.message); }
   e.target.disabled = false; e.target.textContent = 'Measure my ping';
 };
 $('#balCopy').onclick = () => {
