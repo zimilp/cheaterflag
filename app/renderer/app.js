@@ -146,15 +146,39 @@ function scoreFor(m, steamid) {
 }
 
 // ---------- "Watch in CS2"
+/** After opening a demo: copy buttons for the console commands (CS2 can't be sent commands from outside). */
+function watchResult(r) {
+  if (!r || !r.jump) return;
+  const bar = $('#watchBar'); bar.querySelectorAll('.watchCopy').forEach((x) => x.remove());
+  const btn = (label, text) => el('button', { class: 'watchCopy', onclick: (e) => { cf.copy(text); e.target.textContent = 'Copied ✓'; setTimeout(() => { e.target.textContent = label; }, 1500); } }, label);
+  if (r.running) bar.append(btn('Copy load', r.play));
+  bar.append(btn('Copy jump', r.jump));
+}
+/** In-app 2D replay of a moment (falls back to the CS2 message bar on errors). */
+let replayBusy = false;
+function openReplay(opts, tick, steamid, title) {
+  if (replayBusy) return; replayBusy = true;
+  const say = CFReplay.loading('Opening the replay…');
+  const off = (m) => say(m); replayListeners.add(off);
+  cf.replayMoment({ ...opts, tick, steamid }).then((data) => {
+    CFReplay.open(data, { me: me?.steamid, title, onWatchCs2: () => { CFReplay.close(); watchInCs2(opts, tick, steamid); } });
+  }).catch((e) => say('Could not open the replay: ' + (e.message || e))).finally(() => { replayBusy = false; replayListeners.delete(off); });
+}
+const replayListeners = new Set();
+cf.on('replay', (m) => replayListeners.forEach((f) => f(m)));
+function watchInCs2(opts, tick, steamid) {
+  showWatchBar(true); $('#watchMsg').textContent = 'Opening CS2…';
+  cf.watchDemo({ ...opts, tick, ...(steamid ? { steamid } : {}) }).then(watchResult).catch((e) => { $('#watchMsg').textContent = e.message; });
+}
+/** ▶ opens the in-app replay; the small CS2 button opens the same moment in the game. */
+function momentButton(label, opts, tick, steamid, title) {
+  return el('span', { class: 'moment' },
+    el('button', { onclick: () => openReplay(opts, tick, steamid, title), title: 'Replay this moment here (top-down view)' }, '▶ ' + label),
+    el('button', { class: 'cs2', onclick: () => watchInCs2(opts, tick, steamid), title: 'Open this moment in CS2 (first-person)' }, 'CS2'));
+}
 function watchButtons(moments, opts) {
   if (!moments || !moments.length || (!opts.demoPath && !opts.demoUrl)) return null;
-  return el('div', { class: 'row watch' }, moments.slice(0, 6).map((mo) =>
-    el('button', { onclick: () => {
-      showWatchBar(true); $('#watchMsg').textContent = 'Opening CS2…';
-      cf.watchDemo({ ...opts, tick: mo.tick }).then((r) => {
-        if (r && !r.ok && r.manual) $('#watchMsg').textContent = 'Open CS2, press ~ for the console, and run these one at a time: ' + r.manual.join('  →  ');
-      }).catch((e) => { $('#watchMsg').textContent = e.message; });
-    } }, `▶ Round ${mo.round}: ${mo.what}`)));
+  return el('div', { class: 'row watch' }, moments.slice(0, 6).map((mo) => momentButton(`Round ${mo.round}: ${mo.what}`, opts, mo.tick, opts.steamid, `Round ${mo.round}: ${mo.what}`)));
 }
 
 
@@ -188,10 +212,7 @@ function matchExtras(m, key, checks) {
   const hl = m.results.filter((r) => (r.steamid === me?.steamid || isMember(checks[r.steamid])) && (r.highlights || []).length);
   if (hl.length) {
     out.push(el('div', { class: 'extra' }, el('h4', {}, 'Highlights'),
-      el('div', { class: 'row watch' }, hl.flatMap((r) => r.highlights.map((h) => el('button', { onclick: () => {
-        showWatchBar(true); $('#watchMsg').textContent = 'Opening CS2…';
-        cf.watchDemo({ ...opts, steamid: r.steamid, tick: h.tick }).catch((e) => { $('#watchMsg').textContent = e.message; });
-      } }, `▶ ${r.name}: ${h.what} (round ${h.round})`))))));
+      el('div', { class: 'row watch' }, hl.flatMap((r) => r.highlights.map((h) => momentButton(`${r.name}: ${h.what} (round ${h.round})`, opts, h.tick, r.steamid, `${r.name}: ${h.what}`))))));
   }
   return out;
 }

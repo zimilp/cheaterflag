@@ -12,7 +12,7 @@ const THRESHOLDS = {
   trackMinStreak: 8,       // consecutive samples (~1 s) to count as a tracking streak
   trackMinSweep: 10,       // degrees the enemy's bearing must move during the streak (sideways movement)
   trackMinTurn: 8,         // degrees the shooter's view must turn to follow (not a held angle)
-  trackRecentlySeen: 96,   // ticks (~1.5 s): ignore enemies the shooter just saw (they know where they went)
+  trackRecentlySeen: 96, spotLagTicks: 32,   // ticks (~1.5 s): ignore enemies the shooter just saw (they know where they went)
   trackMinDistance: 300,   // ignore point-blank
   snapWindow: 8,           // ticks before the kill (~125 ms)
   snapMinTurn: 25,         // degrees turned within the window
@@ -87,14 +87,23 @@ function analyze(data, T = THRESHOLDS) {
     const ticks = [...sampleTicks.keys()].sort((a, b) => a - b);
     const streaks = new Map();   // shooter|enemy -> streak
     const lastSeen = new Map();  // shooter|enemy -> last tick enemy was spotted by shooter
-    const closeStreak = (key, cur) => {
-      const sweep = angleBetween(bearing(cur.startShooter, cur.start), bearing(cur.lastShooter, cur.last));
-      const turn = viewDelta(cur.startShooter, cur.lastShooter);
-      if (cur.len >= T.trackMinStreak && sweep >= T.trackMinSweep && turn >= T.trackMinTurn) {
+    const pending = new Map();   // ended streaks waiting spotLagTicks to see whether the enemy was really visible
+    const settle = (key, cur) => { const old = pending.get(key); if (old && old !== cur) closeStreak(key, old); pending.set(key, cur); };
+    // CS2's "spotted" flag lags: half a second before a normal kill the killer is only marked as seeing the
+    // victim ~40% of the time. So when an enemy becomes spotted, the last spotLagTicks of a streak were most
+    // likely already visible — drop them before judging the streak.
+    const closeStreak = (key, cur, spottedAt = null) => {
+      let pts = cur.pts;
+      if (spottedAt != null) pts = pts.filter((p) => p.t < spottedAt - T.spotLagTicks);
+      if (pts.length < T.trackMinStreak) return;
+      const a = pts[0], b = pts[pts.length - 1];
+      const sweep = angleBetween(bearing(a.s, a.e), bearing(b.s, b.e));
+      const turn = viewDelta(a.s, b.s);
+      if (sweep >= T.trackMinSweep && turn >= T.trackMinTurn) {
         const st = get(key.split('|')[0]);
         st.wallStreaks += 1;
-        st.rounds.add(roundAt(cur.startTick, data.roundStarts || []));
-        st.moments.push({ tick: cur.startTick, round: roundAt(cur.startTick, data.roundStarts || []), what: 'Tracked a hidden enemy' });
+        st.rounds.add(roundAt(a.t, data.roundStarts || []));
+        st.moments.push({ tick: a.t, round: roundAt(a.t, data.roundStarts || []), what: 'Tracked a hidden enemy' });
       }
     };
     for (const t of ticks) {
@@ -108,7 +117,14 @@ function analyze(data, T = THRESHOLDS) {
           if (enemyId === shooterId || !e.is_alive || e.team_num === s.team_num) continue;
           const key = shooterId + '|' + enemyId;
           const spotted = spottedSet(e);
-          if (spotted && spotted.has(shooterId)) { lastSeen.set(key, t); continue; }
+          if (spotted && spotted.has(shooterId)) {
+            lastSeen.set(key, t);
+            const open = streaks.get(key);
+            if (open) { closeStreak(key, open, t); streaks.delete(key); }
+            const ended = pending.get(key);
+            if (ended) { closeStreak(key, ended, t); pending.delete(key); }
+            continue;
+          }
           if (!spotted) continue;
           if (lastSeen.has(key) && t - lastSeen.get(key) < T.trackRecentlySeen) continue;
           const dist = distance(s, e);
@@ -117,19 +133,21 @@ function analyze(data, T = THRESHOLDS) {
           if (aimError(s, e) > maxErr) continue;
           seen.add(key);
           let cur = streaks.get(key);
-          if (cur && t - cur.lastTick > T.sampleEvery * 1.5) { closeStreak(key, cur); cur = null; }
-          if (!cur) cur = { len: 0, start: e, startShooter: s, startTick: t };
-          cur.len += 1; cur.last = e; cur.lastShooter = s; cur.lastTick = t;
+          if (cur && t - cur.lastTick > T.sampleEvery * 1.5) { settle(key, cur); cur = null; }
+          if (!cur) cur = { pts: [] };
+          cur.pts.push({ t, s, e }); cur.lastTick = t;
           streaks.set(key, cur);
         }
       }
       for (const [key, cur] of streaks) {
         if (seen.has(key)) continue;
-        closeStreak(key, cur);
+        settle(key, cur);
         streaks.delete(key);
       }
+      for (const [key, cur] of pending) if (t - cur.lastTick > T.spotLagTicks) { closeStreak(key, cur); pending.delete(key); }
     }
     for (const [key, cur] of streaks) closeStreak(key, cur);
+    for (const [key, cur] of pending) closeStreak(key, cur);
   }
 
   // ---- 2) kills: snaps, reaction time, unseen wallbangs (+ "how did I die?" notes for each victim)
@@ -634,6 +652,6 @@ function deepScan(demoPath, steamid, T = DEEP) {
 
 // Bump these whenever detection changes: every app then re-scans its matches (SCANNER_VERSION) and re-checks every
 // player it scrutinized (SCRUTINY_VERSION). test/versions.test.js fails if the rules change without a bump.
-const SCANNER_VERSION = 6;   // 6: "how did I die", players who left early, highlights, economy
-const SCRUTINY_VERSION = 2;  // 2: bomb reads (with habits), triggerbot, no-recoil, spinbot/rage, bhop
+const SCANNER_VERSION = 7;   // 7: allow for the lag of CS2's "spotted" flag in wall-tracking. 6: "how did I die", players who left early, highlights, economy
+const SCRUTINY_VERSION = 3;  // 3: spotted-flag lag allowance (via wall-tracking); 2: bomb reads (with habits), triggerbot, no-recoil, spinbot/rage, bhop
 module.exports = { addLeavers, bombReads, mechanicsChecks, analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION, SCRUTINY_VERSION };

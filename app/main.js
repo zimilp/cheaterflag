@@ -43,13 +43,20 @@ function flushHeld() {
 
 // ---------- demo scanning in a utility process
 let scanSeq = 0; const pending = new Map();
-function runScan(demoPath, deep = null, statsOnly = false) {
+function ensureScanProc() {
   if (!scanProc) {
     scanProc = utilityProcess.fork(path.join(__dirname, 'scanWorker.js'));
     scanProc.on('message', (m) => { const p = pending.get(m.id); if (!p) return; pending.delete(m.id); m.ok ? p.resolve(m.scan) : p.reject(new Error(m.error)); });
     scanProc.on('exit', () => { scanProc = null; for (const p of pending.values()) p.reject(new Error('Scanner stopped')); pending.clear(); });
   }
+}
+function runScan(demoPath, deep = null, statsOnly = false) {
+  ensureScanProc();
   return new Promise((resolve, reject) => { const id = ++scanSeq; pending.set(id, { resolve, reject }); scanProc.postMessage({ id, demoPath, deep, statsOnly }); });
+}
+function runReplay(demoPath, replay) {
+  ensureScanProc();
+  return new Promise((resolve, reject) => { const id = ++scanSeq; pending.set(id, { resolve, reject }); scanProc.postMessage({ id, demoPath, replay }); });
 }
 
 // ---------- window + tray
@@ -534,6 +541,42 @@ function watchDir() {
   const cs2 = store.get('cs2Dir') || steamConfig.findCs2Dir();
   return cs2 ? path.join(cs2, 'cheaterflag') : null;
 }
+function isCs2Running() {
+  try { return /cs2\.exe/i.test(require('child_process').execFileSync('tasklist', ['/FI', 'IMAGENAME eq cs2.exe', '/NH'], { encoding: 'utf8', windowsHide: true })); }
+  catch (_) { return false; }
+}
+/** The demo for a moment: already on this PC, or downloaded from Valve (and kept with the flagged demos). */
+async function demoFileFor({ demoPath, demoUrl, key }, say = (m) => send('watch', m)) {
+  if (demoPath && fs.existsSync(demoPath)) return demoPath;
+  for (const dir of [watcher.flaggedDir, watcher.cleanDir]) {          // kept under its own name earlier?
+    const guess = key && dir && path.join(dir, key + '.dem');
+    if (guess && fs.existsSync(guess)) return guess;
+  }
+  if (!demoUrl) throw new Error('This demo is no longer on this PC or on Valve\'s servers.');
+  say('Downloading the demo (about a minute)…');
+  let src = await watcher.download(demoUrl, key || 'demo');
+  fs.mkdirSync(watcher.flaggedDir, { recursive: true });
+  const kept = path.join(watcher.flaggedDir, path.basename(src));
+  fs.renameSync(src, kept);
+  return kept;
+}
+
+// ---------- in-app 2D replay of a moment (no CS2 needed)
+const replayBg = new Map();   // demo path -> map outline + bomb sites (the slow part, built once per demo)
+async function replayMoment(opts) {
+  const say = (m) => send('replay', m);
+  const demo = await demoFileFor(opts, say);
+  let bg = replayBg.get(demo);
+  const cacheFile = path.join(app.getPath('userData'), 'replays', path.basename(demo, '.dem') + '.bg.json');
+  if (!bg) try { bg = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  say(bg ? 'Loading the moment…' : 'Reading the demo (first time for this match takes a few seconds)…');
+  const out = await runReplay(demo, { tick: Number(opts.tick) || 0, focus: opts.steamid ? String(opts.steamid) : null, bg: bg || null });
+  if (!bg) { try { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(out.bg)); } catch (_) {} }
+  replayBg.set(demo, out.bg);
+  if (replayBg.size > 6) replayBg.delete(replayBg.keys().next().value);
+  return out.replay;
+}
+
 let watching = false;
 async function watchDemo({ demoPath, demoUrl, key, tick, steamid }) {
   if (watching) throw new Error('Already opening a demo — give it a few seconds.');
@@ -541,33 +584,29 @@ async function watchDemo({ demoPath, demoUrl, key, tick, steamid }) {
   try {
     const dir = watchDir();
     if (!dir) throw new Error('Could not find your CS2 folder.');
-    let src = demoPath && fs.existsSync(demoPath) ? demoPath : null;
-    if (!src && demoUrl) {
-      send('watch', 'Downloading the demo (about a minute)…');
-      src = await watcher.download(demoUrl, key || 'demo');
-      fs.mkdirSync(watcher.flaggedDir, { recursive: true });
-      const kept = path.join(watcher.flaggedDir, path.basename(src));
-      fs.renameSync(src, kept); src = kept;
-    }
-    if (!src) throw new Error('This demo is no longer on this PC or on Valve\'s servers.');
+    const src = await demoFileFor({ demoPath, demoUrl, key });
     fs.mkdirSync(dir, { recursive: true });
     const name = path.basename(src, '.dem').replace(/[^A-Za-z0-9_-]/g, '');
     const dest = path.join(dir, name + '.dem');
     if (!fs.existsSync(dest)) { send('watch', 'Preparing the demo…'); fs.copyFileSync(src, dest); }
-    const cmds = [`playdemo cheaterflag/${name}`, `demo_gototick ${Math.max(0, Math.floor(tick || 0))}`];
-    if (steamid) cmds.push(`spec_player_by_accountid ${(BigInt(steamid) - STEAM64_BASE).toString()}`);
-
-    const wasOpen = !!lobby.sock;
-    if (!wasOpen) { send('watch', 'Starting CS2…'); shell.openExternal('steam://run/730'); }
-    try { await lobby.ensureNetcon(wasOpen ? 5000 : 180000); }
-    catch (_) { return { manual: cmds }; }
-    if (!wasOpen) await sleep(10000);          // let CS2 finish loading the main menu
-    send('watch', 'Loading the demo in CS2…');
-    await lobby.send(cmds[0]);
-    await sleep(15000);                        // demo load time
-    for (const c of cmds.slice(1)) { await lobby.send(c); await sleep(1500); }
-    send('watch', 'Playing in CS2. If it didn\'t jump to the right moment, open the console (~) and type: ' + cmds.slice(1).join('; '));
-    return { ok: true, manual: cmds };
+    // CS2 no longer accepts commands from outside the game (netcon is gone), so: start CS2 straight into the demo
+    // with a launch command, and put the "jump to the moment" command on the clipboard to paste in the console.
+    const play = `playdemo cheaterflag/${name}`;
+    const jump = [`demo_gototick ${Math.max(0, Math.floor(tick || 0))}`];
+    if (steamid) jump.push(`spec_player_by_accountid ${(BigInt(steamid) - STEAM64_BASE).toString()}`);
+    const jumpCmd = jump.join('; ');
+    if (!isCs2Running()) {
+      const steamExe = steamConfig.steamDir() ? path.join(steamConfig.steamDir(), 'steam.exe') : null;
+      if (steamExe && fs.existsSync(steamExe)) {
+        require('child_process').spawn(steamExe, ['-applaunch', '730', '+playdemo', `cheaterflag/${name}`], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      } else shell.openExternal(`steam://run/730//+playdemo cheaterflag/${name}`);
+      clipboard.writeText(jumpCmd);
+      send('watch', 'Starting CS2 straight into the demo (takes about a minute). When it\'s playing, press ~ (console), Ctrl+V, Enter to jump to the moment.');
+      return { ok: true, launched: true, play, jump: jumpCmd };
+    }
+    clipboard.writeText(play);
+    send('watch', 'CS2 is open: press ~ (console), Ctrl+V, Enter to load the demo. Once it\'s playing, click "Copy jump" below and paste the same way.');
+    return { ok: true, running: true, play, jump: jumpCmd };
   } finally { watching = false; }
 }
 
@@ -700,6 +739,7 @@ function registerIpc() {
     return { auth: !!auth, share: !!share };
   });
   h('watchDemo', (opts) => watchDemo(opts || {}));
+  h('replayMoment', (opts) => replayMoment(opts || {}));
   h('clearAllFlags', () => api.clearAllFlags());
   h('voteFlag', (id, vote) => api.voteFlag(id, vote));
   h('voteBlacklist', (id, vote) => api.voteBlacklist(id, vote));

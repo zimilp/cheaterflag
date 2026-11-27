@@ -7,13 +7,14 @@ const assert = require('node:assert');
 const crypto = require('crypto');
 const D = require('../lib/demoScan');
 
-const hash = (...parts) => crypto.createHash('sha1').update(parts.map((p) => (typeof p === 'function' ? p.toString() : JSON.stringify(p))).join('\n')).digest('hex').slice(0, 12);
+// Line endings are normalised: GitHub's Windows runner checks files out with CRLF.
+const hash = (...parts) => crypto.createHash('sha1').update(parts.map((p) => (typeof p === 'function' ? p.toString() : JSON.stringify(p)).replace(/\r\n/g, '\n')).join('\n')).digest('hex').slice(0, 12);
 const scanPrint = hash(D.THRESHOLDS, D.STRICT, D.analyze, D.judge, D.applyScrutiny);
 const deepPrint = hash(D.DEEP, D.deepAnalyze, D.bombReads, D.mechanicsChecks);
 
 const KNOWN = {
-  scanner: { [D.SCANNER_VERSION]: '164c0d03b365' },
-  scrutiny: { [D.SCRUTINY_VERSION]: 'fc3526bcde81' },
+  scanner: { [D.SCANNER_VERSION]: 'd52be70ea4a1' },
+  scrutiny: { [D.SCRUTINY_VERSION]: '24d34d28132b' },
 };
 
 test('detection changes come with a version bump', () => {
