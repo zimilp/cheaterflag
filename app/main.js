@@ -186,7 +186,7 @@ setInterval(remindReports, 10 * 60 * 1000);
 
 function startServices() {
   lobby && lobby.stop(); watcher && watcher.stop();
-  lobby = new LobbyScanner({ cs2Dir: store.get('cs2Dir'), netconPort: Number(store.get('netconPort') || 2121), ownSteamId: store.get('steamid'), ownName: store.get('name') });
+  lobby = new LobbyScanner({ cs2Dir: store.get('cs2Dir'), netconPort: Number(store.get('netconPort') || 2121), ownSteamId: store.get('steamid'), ownName: store.get('name'), isGameRunning: isCs2Running });
   lobby.on('status', (s) => { lobbyState.consoleLog = s.consoleLog; send('lobby', lobbyState); });
   lobby.on('netcon', (on) => { lobbyState.netcon = on; send('lobby', lobbyState); });
   lobby.on('matchStart', () => { lobbyState.players = []; lobbyState.checks = {}; lobbyState.names = []; lobbyState.nameHits = {}; send('lobby', lobbyState); });
@@ -550,6 +550,22 @@ function watchDir() {
   const cs2 = store.get('cs2Dir') || steamConfig.findCs2Dir();
   return cs2 ? path.join(cs2, 'cheaterflag') : null;
 }
+// clear the Lobby as soon as CS2 is closed (also when the app was started after the game had closed)
+let cs2WasRunning = null;
+setInterval(() => {
+  require('child_process').execFile('tasklist', ['/FI', 'IMAGENAME eq cs2.exe', '/NH'], { encoding: 'utf8', windowsHide: true }, (err, out) => {
+    const running = !err && /cs2\.exe/i.test(String(out || ''));
+    if (!running && lobby) {
+      const had = lobbyState.players.length || lobbyState.names.length || lobbyState.map;
+      if (lobby.gameClosed() === false && had) {   // nothing in the scanner but the screen still shows a list
+        Object.assign(lobbyState, { players: [], checks: {}, names: [], nameHits: {}, live: null, lastStatus: null, map: null, reports: [] });
+        send('lobby', lobbyState); refreshSquad();
+      }
+    }
+    lobbyState.gameRunning = running;
+    if (running !== cs2WasRunning) { cs2WasRunning = running; send('lobby', lobbyState); }
+  });
+}, 15000);
 function isCs2Running() {
   try { return /cs2\.exe/i.test(require('child_process').execFileSync('tasklist', ['/FI', 'IMAGENAME eq cs2.exe', '/NH'], { encoding: 'utf8', windowsHide: true })); }
   catch (_) { return false; }

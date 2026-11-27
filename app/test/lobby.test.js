@@ -71,3 +71,14 @@ test('chat call-outs from console.log', () => {
   for (const t of ['hahaha', 'nice shot', 'especially', 'vacation', 'gg wp']) assert.ok(!isAccusation(t), t);
   assert.deepEqual(namesIn('report sanga he is walling', ['sAngA`', 'Xinhai', 'cfab']), ['sAngA`']);
 });
+
+test('lobby clears when CS2 is closed, and old logs are not reloaded while the game is closed', () => {
+  const { LobbyScanner } = require('../lib/lobbyScanner');
+  const s = new LobbyScanner({ ownName: 'me', isGameRunning: () => false });
+  let ended = 0; s.on('matchEnd', () => { ended += 1; });
+  s.feed('11/26 18:00:00 [HostStateManager] Host activate: Remote Connect (=[A:1:123:456])\n11/26 18:00:05 Alice connected\n');
+  assert.ok(s.names.size >= 1);
+  assert.equal(s.gameClosed(), true);
+  assert.equal(s.names.size, 0); assert.equal(ended, 1);
+  assert.equal(s.gameClosed(), false);   // nothing left to clear
+});

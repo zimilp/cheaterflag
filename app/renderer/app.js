@@ -98,6 +98,7 @@ function renderLobby(l) {
   $('#lobbyReports').replaceChildren(...(reps.length ? [el('h4', {}, 'Called out in chat this match'),
     ...reps.map((r) => el('div', { class: 'muted small' }, `${r.by}${r.round ? ' (round ' + r.round + ')' : ''}: "${r.text}" → ${r.targets && r.targets.length ? r.targets.join(', ') : 'whoever killed them'} will be scrutinized automatically after the match`))] : []));
   const conf = (l.live && l.live.confirmed) || [];
+  if (l.gameRunning === false) { $('#lobbyStatus').textContent = 'CS2 is closed — the player list fills in when you join a match.'; } else
   $('#lobbyStatus').textContent = (names.length ? "Reading players from CS2's console log." : 'Waiting for a match… players appear as they join.') + ((l.lastStatus && l.lastStatus.count >= 8) ? '' : ' CS2 only logs players who join after you — hold TAB once in the match to list everyone (turn on "Full lobby list" in Settings).')
     + (l.lastStatus ? ` Last player list: ${new Date(l.lastStatus.at).toLocaleTimeString()} (${l.lastStatus.count} player${l.lastStatus.count === 1 ? '' : 's'}).` : '')
     + (l.live ? (l.live.serverKnown ? ' Steam shows your game server, so blacklisted players are confirmed by SteamID.' : ' Steam isn\'t sharing your game server right now, so matches are by name + "playing CS2 now".') : '')

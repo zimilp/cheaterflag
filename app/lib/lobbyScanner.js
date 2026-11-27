@@ -95,8 +95,9 @@ function findConsoleLog(customDir) {
 }
 
 class LobbyScanner extends EventEmitter {
-  constructor({ cs2Dir, netconPort = 2121, ownSteamId, ownName } = {}) {
+  constructor({ cs2Dir, netconPort = 2121, ownSteamId, ownName, isGameRunning = null } = {}) {
     super();
+    this.isGameRunning = isGameRunning;
     this.cs2Dir = cs2Dir; this.netconPort = netconPort; this.ownSteamId = ownSteamId; this.ownName = ownName;
     this.current = new Set(); this.names = new Set(); this.pos = 0; this.timer = null; this.sock = null;
   }
@@ -106,8 +107,10 @@ class LobbyScanner extends EventEmitter {
     if (this.logPath) {
       const size = fs.statSync(this.logPath).size;
       this.pos = size;
-      // started mid-match? read back to the last match start so the lobby isn't empty
+      // started mid-match? read back to the last match start so the lobby isn't empty (only if CS2 is actually open —
+      // otherwise the log is from a game that has already closed)
       try {
+        if (this.isGameRunning && !this.isGameRunning()) throw new Error('CS2 not running');
         const len = Math.min(size, 2 * 1024 * 1024), buf = Buffer.alloc(len);
         const fd = fs.openSync(this.logPath, 'r'); fs.readSync(fd, buf, 0, len, size - len); fs.closeSync(fd);
         const lines = buf.toString('utf8').split(/\r?\n/);
@@ -128,6 +131,15 @@ class LobbyScanner extends EventEmitter {
   }
 
   stop() { clearInterval(this.timer); if (this.sock) this.sock.destroy(); }
+
+  /** CS2 was closed (quitting straight out of a match never writes "Idle"): the match is over. */
+  gameClosed() {
+    if (!this.server && !this.names.size && !this.current.size) return false;
+    this.prev = this.server ? { server: this.server, names: [...this.names], at: Date.now() } : this.prev;
+    this.server = null; this.map = null; this.current.clear(); this.names.clear();
+    this.emit('matchEnd');
+    return true;
+  }
 
   feed(text) {
     const fresh = [];
