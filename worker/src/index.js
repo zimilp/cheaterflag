@@ -299,6 +299,23 @@ function aggregateStats(results) {
   return [...by.values()];
 }
 
+/** Squad stats for the last `days` (0 = all time), shared by everyone and rebuilt at most every 30 minutes:
+ *  reading every match row for every request is what used up the database's free daily reads. */
+const STATS_TTL = 30 * 60;
+async function cachedStats(env, days) {
+  const k = 'stats:' + (Number(days) || 0);
+  try {
+    const c = await env.DB.prepare('SELECT v, at FROM cache WHERE k = ?').bind(k).first();
+    if (c && now() - c.at < STATS_TTL) return JSON.parse(c.v);
+  } catch (_) {}
+  const since = days > 0 ? Date.now() - days * 86400000 : 0;
+  const { results } = await env.DB.prepare(`SELECT s.steamid, s.stats, m.name FROM match_stats s JOIN members m ON m.steamid = s.steamid
+    WHERE m.status = 'approved' AND COALESCE(s.played_at, 0) >= ?`).bind(since).all();
+  const players = aggregateStats(results);
+  try { await env.DB.prepare('INSERT OR REPLACE INTO cache (k, v, at) VALUES (?,?,?)').bind(k, JSON.stringify(players), now()).run(); } catch (_) {}
+  return players;
+}
+
 async function route(req, env) {
   const url = new URL(req.url);
   const p = url.pathname.replace(/\/$/, '') || '/';
@@ -404,11 +421,15 @@ async function route(req, env) {
     }
     const ids = squad.map((x) => x.steamid);
     const ph = ids.map(() => '?').join(',');
-    const { results } = await env.DB.prepare(`SELECT s.steamid, s.stats, s.map, m.name FROM match_stats s JOIN members m ON m.steamid = s.steamid WHERE s.steamid IN (${ph})`).bind(...ids).all();
     const mapKey = (x) => String(x || '').toLowerCase().replace(/^(de|cs)_/, '').replace(/\s+/g, '');
     const want = mapKey(body.map);
-    const stats = new Map(aggregateStats(results).map((a) => [a.steamid, a]));
-    const onMap = new Map(want ? aggregateStats(results.filter((r) => mapKey(r.map) === want)).map((a) => [a.steamid, a]) : []);
+    const stats = new Map((await cachedStats(env, 0)).filter((a) => ids.includes(a.steamid)).map((a) => [a.steamid, a]));
+    let onMap = new Map();
+    if (want && ids.length) {   // only this squad's rows on this map (indexed lookup)
+      const { results } = await env.DB.prepare(`SELECT s.steamid, s.stats, s.map, m.name FROM match_stats s JOIN members m ON m.steamid = s.steamid WHERE s.steamid IN (${ph}) AND s.map IN (?, ?)`)
+        .bind(...ids, 'de_' + want, want).all();
+      onMap = new Map(aggregateStats(results.filter((r) => mapKey(r.map) === want)).map((a) => [a.steamid, a]));
+    }
     const empty = (id) => ({ steamid: id, all: {}, full: {}, demo: {}, awards: {} });
     return json({ map: want || null, squad: squad.map((x) => ({ ...(stats.get(x.steamid) || empty(x.steamid)), onMap: onMap.get(x.steamid) || null, name: x.name, how: x.how })) });
   }
@@ -646,10 +667,7 @@ async function route(req, env) {
   }
   if (p === '/stats' && req.method === 'GET') {
     const days = Number(url.searchParams.get('days')) || 0;
-    const since = days > 0 ? Date.now() - days * 86400000 : 0;
-    const { results } = await env.DB.prepare(`SELECT s.steamid, s.stats, m.name FROM match_stats s JOIN members m ON m.steamid = s.steamid
-      WHERE m.status = 'approved' AND COALESCE(s.played_at, 0) >= ?`).bind(since).all();
-    return json({ players: aggregateStats(results) });
+    return json({ players: await cachedStats(env, [0, 7, 14, 30, 90].includes(days) ? days : 0) });
   }
 
   const dm = p.match(/^\/demos\/(\d+)$/);

@@ -19,7 +19,14 @@ class Api {
     }
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch (_) { data = { error: text }; }
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) {
+      const msg = String(data.error || `HTTP ${res.status}`);
+      if (/exceeded D1|daily row (read|write) limit/i.test(msg)) {
+        const reset = new Date(); reset.setUTCHours(24, 0, 0, 0);
+        throw new Error(`The group's server reached its free daily limit — back at ${reset.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Scanning on this PC keeps working.`);
+      }
+      throw new Error(msg);
+    }
     return data;
   }
 

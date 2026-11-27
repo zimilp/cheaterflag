@@ -123,6 +123,7 @@ async function liveCheck() {
 let squadBusy = false;
 async function refreshSquad() {
   if (squadBusy || !api || !store.get('token')) return;
+  if (lobbyState.gameRunning === false && !lobbyState.names.length) return;   // only while playing (saves server reads)
   squadBusy = true;
   try {
     const r = await api.squad(lobbyState.names || [], lobbyState.map || null);
@@ -131,7 +132,7 @@ async function refreshSquad() {
     send('lobby', lobbyState);
   } catch (_) { /* try again later */ } finally { squadBusy = false; }
 }
-setInterval(refreshSquad, 2 * 60 * 1000);
+setInterval(refreshSquad, 10 * 60 * 1000);   // plus right away whenever the lobby or map changes
 let liveTimer = null;
 function onGameState(next, prev) {
   send('game', next);
@@ -154,7 +155,7 @@ async function onLobbyNames(fresh, all) {
 // Flags waiting for your vote: reminded every 5 minutes, but never while a match is being played.
 async function remindVotes() {
   if (!store.get('token') || (gsi && gsi.quietTime())) return;
-  if (Date.now() - (store.get('lastVoteReminder') || 0) < 5 * 60 * 1000 - 5000) return;
+  if (Date.now() - (store.get('lastVoteReminder') || 0) < 30 * 60 * 1000 - 5000) return;
   try {
     const { flags } = await api.flags('pending');
     const waiting = flags.filter((f) => !f.my_vote);
@@ -163,7 +164,7 @@ async function remindVotes() {
     notify('CheaterFlag: your vote is needed', `${waiting.length} suspected cheater${waiting.length === 1 ? '' : 's'} waiting for your vote in Review.`, () => { createWindow(); send('goto', 'review'); });
   } catch (_) {}
 }
-setInterval(remindVotes, 5 * 60 * 1000);
+setInterval(remindVotes, 30 * 60 * 1000);
 
 // When someone you played with gets blacklisted, ask you to report them in that match (one real report each).
 async function remindReports() {
@@ -182,7 +183,7 @@ async function remindReports() {
     store.set({ reportReminders: [...told] });
   } catch (_) {}
 }
-setInterval(remindReports, 10 * 60 * 1000);
+setInterval(remindReports, 30 * 60 * 1000);
 
 function startServices() {
   lobby && lobby.stop(); watcher && watcher.stop();

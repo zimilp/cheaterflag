@@ -9,7 +9,13 @@ const el = (tag, attrs = {}, ...kids) => {
   for (const k of kids.flat()) if (k != null) e.append(k instanceof Node ? k : document.createTextNode(String(k)));
   return e;
 };
-const log = (m) => { const l = $('#log'); l.textContent = `[${new Date().toLocaleTimeString()}] ${m}\n` + l.textContent.slice(0, 4000); };
+const logSeen = new Map();   // the same message within 10 minutes is shown once
+const log = (m) => {
+  const key = String(m).replace(/\d+/g, '#'), last = logSeen.get(key);
+  if (last && Date.now() - last < 10 * 60 * 1000) return;
+  logSeen.set(key, Date.now());
+  const l = $('#log'); l.textContent = `[${new Date().toLocaleTimeString()}] ${m}\n` + l.textContent.slice(0, 4000);
+};
 const tierBadge = (t) => el('span', { class: 'badge ' + (t || 'unknown') }, { approved: 'Clean', limited: 'Caution', rejected: 'Flagged' }[t] || 'Unknown');
 const fail = (e) => log(e.message || e);
 

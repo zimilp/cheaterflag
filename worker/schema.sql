@@ -110,3 +110,16 @@ CREATE TABLE IF NOT EXISTS pings (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (steamid, pop)
 );
+
+-- indexes: without them every lookup reads whole tables (blew the free daily read limit)
+CREATE INDEX IF NOT EXISTS idx_match_stats_player ON match_stats (steamid, map);
+CREATE INDEX IF NOT EXISTS idx_match_stats_played ON match_stats (played_at);
+CREATE INDEX IF NOT EXISTS idx_flags_status ON flags (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_members_status ON members (status);
+
+-- computed results shared by every member's app (squad stats are rebuilt at most every 30 minutes)
+CREATE TABLE IF NOT EXISTS cache (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
