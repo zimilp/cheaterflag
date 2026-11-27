@@ -10,21 +10,21 @@
   <header>
     <div class="brand"><span class="dot"></span> CheaterFlag</div>
     <nav id="tabs">
-      <button data-tab="setup" class="active">Setup</button>
+      <button data-tab="matches" class="active">My matches</button>
       <button data-tab="lobby">Lobby</button>
-      <button data-tab="matches">My matches</button>
       <button data-tab="stats">Stats</button>
       <button data-tab="review">Review</button>
       <button data-tab="blacklist">Blacklist</button>
       <button data-tab="members" class="admin-only hidden">Members</button>
       <button data-tab="settings">Settings</button>
+      <button data-tab="setup">Setup</button>
     </nav>
     <div id="who"></div>
   </header>
 
   <main>
     <div id="updBar" class="card updbar hidden"><span id="updBarMsg">A CheaterFlag update is ready. It installs by itself after your match.</span><button class="primary small" id="btnInstallNow">Install now</button></div>
-    <section id="tab-setup" class="tab">
+    <section id="tab-setup" class="tab hidden">
       <h2>Set up CheaterFlag</h2>
       <p class="muted">Three quick steps. Green ticks mean you're done.</p>
 
@@ -67,6 +67,18 @@
     <section id="tab-lobby" class="tab hidden">
       <h2>Current match</h2>
       <p class="muted">As soon as a match loads, CheaterFlag checks it against the shared blacklist. When Steam shows which game server you're on, blacklisted players in the same server are confirmed by SteamID — not just by name. Notifications wait until warmup or the menu, never mid-round. Every account is fully checked (bans + demo scan) right after the match.</p>
+      <div class="card" id="balanceCard">
+        <div class="row between"><h3>Inhouse 5v5 · balance teams</h3>
+          <span class="row"><button id="balOpen">Balance teams</button></span></div>
+        <div id="balBody" class="hidden">
+          <p class="muted small">Tick the 10 players. Teams are split on skill (whole history), current form (last 14 days) and ping to the server you pick, with the AWPers split up and one in-game leader per team.</p>
+          <div id="balPlayers" class="balplayers"></div>
+          <div class="row"><input id="balGuest" placeholder="Add a guest (name)" /><button id="balAddGuest">Add</button></div>
+          <div class="row"><label class="inline">Server <select id="balRegion"></select></label><button id="balPing" title="Measure this PC's ping to every region now">Measure my ping</button>
+            <span class="rp-sp"></span><span id="balCount" class="muted"></span><button id="balGo">Make teams</button><button id="balAgain" class="hidden" title="Next-fairest split, for variety">Shuffle</button><button id="balCopy" class="hidden">Copy</button></div>
+          <div id="balResult"></div>
+        </div>
+      </div>
       <p id="lobbyStatus" class="muted"></p>
       <div id="lobbyReports"></div>
       <div id="squadCard" class="card hidden">
@@ -76,7 +88,7 @@
       <table><thead><tr><th>Player</th><th>Status</th><th>Why</th><th></th></tr></thead><tbody id="lobbyRows"></tbody></table>
     </section>
 
-    <section id="tab-matches" class="tab hidden">
+    <section id="tab-matches" class="tab">
       <h2>My matches</h2>
       <p class="muted" id="autoStatus">Every match you play is checked automatically.</p>
       <p id="progress" class="muted"></p>
@@ -160,6 +172,7 @@
   </main>
   <script src="roles.js"></script>
   <script src="replay.js"></script>
+  <script src="balance.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

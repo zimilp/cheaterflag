@@ -108,3 +108,16 @@ test('through smoke: core only, and not right after an HE opened it', () => {
   assert.equal(smokeNote(smokeDeath({ smokes: [{ tick: 500, end: 900, x: 500, y: 60 }] })), false);     // smoke already gone
   assert.equal(smokeNote(smokeDeath({ smokes: [{ tick: 500, end: 2000, x: 500, y: 60 }], nades: [{ tick: 900, x: 520, y: 40 }] })), false); // HE blew it open
 });
+
+test('through smoke: no note when the victim was spotted (by the killer or their team) just before', () => {
+  const spottedRow = (tick, by) => [{ tick, steamid: 'k', X: 0, Y: 0, Z: 0, pitch: 0, yaw: 0, is_alive: true, team_num: 2, approximate_spotted_by: [] },
+                                    { tick, steamid: 'm', X: -100, Y: 0, Z: 0, pitch: 0, yaw: 0, is_alive: true, team_num: 2, approximate_spotted_by: [] },
+                                    { tick, steamid: 'v', X: 1000, Y: 0, Z: 0, pitch: 0, yaw: 180, is_alive: true, team_num: 3, approximate_spotted_by: by }];
+  const smoke = [{ tick: 500, end: 2000, x: 500, y: 60 }];
+  const base = smokeDeath({ smokes: smoke });
+  base.players.push({ steamid: 'm', name: 'M' });
+  const withSpot = (by) => ({ ...base, samples: [...spottedRow(880, by), ...spottedRow(888, [])] });
+  assert.equal(smokeNote(withSpot([])), true);          // never seen: still a smoke note
+  assert.equal(smokeNote(withSpot(['k'])), false);      // the killer saw them 2 s earlier
+  assert.equal(smokeNote(withSpot(['m'])), false);      // a teammate spotted them (radar)
+});

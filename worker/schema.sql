@@ -100,3 +100,13 @@ CREATE TABLE IF NOT EXISTS match_stats (
   stats TEXT NOT NULL,
   PRIMARY KEY (match_id, steamid)
 );
+
+-- ping from each member's PC to Valve's server regions (team balancer picks a fair server)
+CREATE TABLE IF NOT EXISTS pings (
+  steamid TEXT NOT NULL,
+  pop TEXT NOT NULL,
+  ms INTEGER NOT NULL,
+  name TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (steamid, pop)
+);

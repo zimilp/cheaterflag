@@ -193,3 +193,13 @@ table.stats tbody tr:hover td { background:#1a1f2a; }
 .watch .moment button.cs2 { border-top-left-radius:0; border-bottom-left-radius:0; border-left:1px solid var(--line); }
 #replayModal ol.cs2steps { margin:0 0 10px; padding-left:20px; line-height:1.9; }
 #replayModal ol.cs2steps button { font-size:12px; padding:2px 8px; }
+.badge.odd { background:#3a2330; color:#ff8fb0; }
+.badge.hl { background:#2b2a45; color:#c9b8ff; }
+.balplayers { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+.balp { display:inline-flex !important; align-items:center; gap:6px; margin:0 !important; padding:4px 10px; border:1px solid var(--line); border-radius:16px; cursor:pointer; color:var(--text) !important; }
+.balp.on { border-color:var(--accent); background:#2a1d1a; }
+.balp input { display:inline-block !important; width:auto !important; min-width:0; margin:0 !important; }
+.balgrid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.balteam h4 { margin-top:0; }
+.balrow { padding:6px 0; border-bottom:1px solid var(--line); }
+.badge.igl { background:#1f3a2c; color:#7ee2a8; margin-left:6px; }

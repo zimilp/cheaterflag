@@ -9,6 +9,8 @@ const { LobbyScanner } = require('./lib/lobbyScanner');
 const { MatchWatcher } = require('./lib/matchWatcher');
 const steamConfig = require('./lib/steamConfig');
 const tabStatus = require('./lib/tabStatus');
+const matchId = require('./lib/matchId');
+const ping = require('./lib/ping');
 const retention = require('./lib/retention');
 const { GameState, installCfg } = require('./lib/gsi');
 const { SCANNER_VERSION, SCRUTINY_VERSION } = require('./lib/demoScan');
@@ -225,6 +227,7 @@ function startServices() {
 // Silent setup: find CS2, and add launch options whenever Steam happens to be closed.
 function autoConfigure() {
   try {
+    try { const h = store.get('history') || []; const d = matchId.dedupeHistory(h); if (d.length !== h.length) store.set({ history: d }); } catch (_) {}
     if (!store.get('cs2Dir')) { const d = steamConfig.findCs2Dir(); if (d) store.set({ cs2Dir: d }); }
     try { tabStatus.apply(store.get('cs2Dir'), store.get('tabStatus') === true, false); if (!clearTimer) tabStatus.queueDemo(store.get('cs2Dir'), null); } catch (_) {}
     const id = store.get('steamid');
@@ -473,17 +476,23 @@ function startBackfill() {
   }
   // ...and re-check demos the old version flagged that aren't in that list (keeps or deletes them)
   if (store.get('scannerVersion') !== SCANNER_VERSION) {
-    const prevFor = (p) => (store.get('history') || []).find((h) => h.keptDemo === p) || {};
+    const hist = store.get('history') || [];
+    const prevFor = (p) => { const k = matchId.matchKey(p); return hist.find((h) => h.keptDemo === p) || (k && hist.find((h) => matchId.entryKey(h) === k)) || {}; };
     const urlFor = (p) => prevFor(p).demoUrl || null;
     try {
-      // demos still on this PC (flagged or kept clean) are re-scanned locally instead of downloaded again
+      // demos still on this PC (flagged or kept clean) are re-scanned locally instead of downloaded again.
+      // The same match can be saved twice (by share code and by link): scan it once.
+      const seenKeys = new Set();
       for (const dir of [watcher.flaggedDir, watcher.cleanDir]) {
         if (!fs.existsSync(dir)) continue;
-        for (const f of fs.readdirSync(dir)) {
-          if (!/\.dem$/i.test(f)) continue;
+        const files = fs.readdirSync(dir).filter((f) => /\.dem$/i.test(f)).sort((a, b) => (/^CSGO-/.test(a) ? 1 : 0) - (/^CSGO-/.test(b) ? 1 : 0));
+        for (const f of files) {
           const p = path.join(dir, f);
           const id = (f.match(/(\d+_\d+)/) || [])[1];
           if (id) keptIds.add(id);
+          const k = matchId.matchKey(f);
+          if (k && seenKeys.has(k)) continue;
+          if (k) seenKeys.add(k);
           items.push({ type: 'kept', path: p, demoUrl: urlFor(p), playedAt: prevFor(p).playedAt || null });
         }
       }
@@ -589,6 +598,23 @@ function clearQueuedDemoWhenStarted(cs2) {
       try { tabStatus.queueDemo(cs2, null); } catch (_) {}
     }
   }, 5000);
+}
+
+// ---------- ping to Valve's server regions (team balancer: fair server, bad connections spread evenly)
+let pingRunning = false;
+async function measurePings(force = false) {
+  if (pingRunning || !store.get('token') || !api) return null;
+  if (!force && isCs2Running()) return null;          // never while playing
+  pingRunning = true;
+  try {
+    const list = await ping.relayList();
+    const pops = await ping.measureAll(list);
+    const names = Object.fromEntries(Object.entries(list).map(([k, v]) => [k, v.name]));
+    store.set({ pings: { at: Date.now(), pops, names } });
+    await api.uploadPings({ pops, names });
+    return { pops, names };
+  } catch (e) { send('log', 'Ping check: ' + e.message); return null; }
+  finally { pingRunning = false; }
 }
 
 let watching = false;
@@ -709,6 +735,11 @@ function registerIpc() {
   h('removeBlacklist', (id) => api.removeBlacklist(id));
   h('flags', (s) => api.flags(s));
   h('stats', (days) => api.stats(days));
+  h('balanceData', async () => {
+    const [all, form, pings] = await Promise.all([api.stats(0), api.stats(14), api.pings().catch(() => ({ players: {}, names: {} }))]);
+    return { all: all.players || [], form: form.players || [], pings, mine: store.get('pings') || null };
+  });
+  h('measurePings', () => measurePings(true));
   h('reviewFlag', (id, action) => api.reviewFlag(id, action));
   h('members', () => api.members());
   h('setMember', (id, patch) => api.setMember(id, patch));
@@ -793,6 +824,8 @@ app.whenReady().then(() => {
   setTimeout(backfillStats, 90000);
   setTimeout(refreshSquad, 15000);
   setTimeout(rescrutinize, 5 * 60000);
+  setTimeout(measurePings, 2 * 60000);
+  setInterval(measurePings, 6 * 60 * 60000);
   setInterval(rescrutinize, 60 * 60000);
   setTimeout(syncHistoryStats, 3 * 60000);
   setInterval(syncHistoryStats, 12 * 3600000);

@@ -28,12 +28,12 @@ const players = [{ steamid: CHEAT, name: 'cheater' }, { steamid: LEGIT, name: 'l
 
 function synthetic() {
   const samples = [], killWindows = [], deaths = [];
-  // 6 tracking streaks: enemy walks behind a wall; cheater's crosshair follows, legit looks away.
+  // 6 tracking streaks: enemy walks (silently, 112 u/s) behind a wall; cheater's crosshair follows, legit looks away.
   for (let s = 0; s < 6; s++) {
     const base = 10000 + s * 2000;
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
       const tick = base + i * 8;
-      const enemy = { tick, steamid: ENEMY, X: 1500, Y: i * 30, Z: 0, pitch: 0, yaw: 180, is_alive: true, team_num: 2, approximate_spotted_by: [] };
+      const enemy = { tick, steamid: ENEMY, X: 1000, Y: i * 14, Z: 0, pitch: 0, yaw: 180, is_alive: true, team_num: 2, approximate_spotted_by: [] };
       const c = { tick, steamid: CHEAT, X: 0, Y: 0, Z: 0, is_alive: true, team_num: 3, approximate_spotted_by: [] };
       Object.assign(c, lookAt(c, enemy));
       const l = { tick, steamid: LEGIT, X: 0, Y: 200, Z: 0, pitch: 0, yaw: 90, is_alive: true, team_num: 3, approximate_spotted_by: [] };

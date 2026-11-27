@@ -587,6 +587,25 @@ async function route(req, env) {
     for (const mt of list) saved += await saveMatchStats(env, mt);
     return json({ saved });
   }
+  // --- pings to Valve's server regions (team balancer)
+  if (p === '/pings' && req.method === 'POST') {
+    const pops = body.pops && typeof body.pops === 'object' ? Object.entries(body.pops).slice(0, 80) : [];
+    const names = body.names && typeof body.names === 'object' ? body.names : {};
+    await env.DB.prepare('DELETE FROM pings WHERE steamid = ?').bind(m.steamid).run();
+    for (const [pop, ms] of pops) {
+      if (!/^[a-z0-9]{2,8}$/i.test(pop) || !(Number(ms) >= 0 && Number(ms) < 2000)) continue;
+      await env.DB.prepare('INSERT OR REPLACE INTO pings (steamid, pop, ms, name, updated_at) VALUES (?,?,?,?,?)')
+        .bind(m.steamid, pop, Math.round(Number(ms)), String(names[pop] || pop).slice(0, 60), now()).run();
+    }
+    return json({ ok: true });
+  }
+  if (p === '/pings' && req.method === 'GET') {
+    const { results } = await env.DB.prepare(`SELECT p.steamid, p.pop, p.ms, p.name FROM pings p JOIN members m ON m.steamid = p.steamid
+      WHERE m.status = 'approved' AND p.updated_at >= ?`).bind(now() - 30 * 86400).all();
+    const players = {}, names = {};
+    for (const r of results) { (players[r.steamid] = players[r.steamid] || {})[r.pop] = r.ms; names[r.pop] = r.name; }
+    return json({ players, names });
+  }
   if (p === '/stats' && req.method === 'GET') {
     const days = Number(url.searchParams.get('days')) || 0;
     const since = days > 0 ? Date.now() - days * 86400000 : 0;

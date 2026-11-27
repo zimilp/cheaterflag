@@ -10,6 +10,7 @@ const { EventEmitter } = require('events');
 const retention = require('./retention');
 const { SCANNER_VERSION, applyScrutiny } = require('./demoScan');
 const { awards } = require('./matchStats');
+const { entryKey, decodeShareCode } = require('./matchId');
 
 const AWARDS_VERSION = 2;
 const STATS_VERSION = 2;    // bump when new stats are counted: saved demos get counted again   // bump when award rules change: saved matches get their awards recalculated
@@ -117,10 +118,16 @@ class MatchWatcher extends EventEmitter {
     const result = { shareCode: key, map: scan.mapName, teams: scan.teams || [], playedAt, at: Date.now(), results: scan.results, checks, keptDemo: kept, local: ownFile, demoUrl };
     this.addAwards(result);
     this.shareStats(result);
-    // a re-scan replaces the old entry for the same match (same key, or same Valve match id)
-    const idOf = (h) => [h.demoUrl, h.keptDemo, h.shareCode].map((x) => (String(x || '').match(/(\d{15,30})_\d{6,12}/) || [])[1]).find(Boolean) || null;
-    const myId = idOf(result);
-    const others = (this.store.get('history') || []).filter((h) => h.shareCode !== result.shareCode && !(myId && idOf(h) === myId));
+    // a re-scan replaces the old entry for the same match (same key, or the same match known by link or share code),
+    // keeping when it was played and its replay link
+    const myKey = entryKey(result);
+    const same = (h) => h.shareCode === result.shareCode || (myKey && entryKey(h) === myKey);
+    const all = this.store.get('history') || [];
+    for (const h of all.filter(same)) {
+      if (!result.playedAt && h.playedAt) result.playedAt = h.playedAt;
+      if (!result.demoUrl && h.demoUrl) result.demoUrl = h.demoUrl;
+    }
+    const others = all.filter((h) => !same(h));
     this.store.set({ history: [result, ...others].slice(0, 150) });
     this.emit('match', result);
     return result;
@@ -139,7 +146,10 @@ class MatchWatcher extends EventEmitter {
   /** Send members' stats for the Stats tab (the service keeps members only). Needs Valve's match id. */
   shareStats(result) {
     // Valve's match id: in the demo link (…/730/<id>_<n>.dem) or a CS2 replay file name (match730_<id>_<n>_<server>.dem)
-    const matchId = [result.demoUrl, result.keptDemo, result.shareCode].map((x) => (String(x || '').match(/(\d{15,30})_\d{6,12}/) || [])[1]).find(Boolean);
+    // same id format as Valve's replay links (21 digits), also for matches only known by share code
+    const fromCode = decodeShareCode(result.shareCode) || decodeShareCode(result.keptDemo);
+    const matchId = [result.demoUrl, result.keptDemo, result.shareCode].map((x) => (String(x || '').match(/(\d{15,30})_\d{6,12}/) || [])[1]).find(Boolean)
+      || (fromCode ? fromCode.reservationId.padStart(21, '0') : null);
     if (!matchId) return;
     const wl = (r) => (r.teamScore == null ? {} : { wins: +(r.teamScore > r.oppScore), losses: +(r.teamScore < r.oppScore), ties: +(r.teamScore === r.oppScore) });
     const players = result.results.filter((r) => r.awards && r.stats).map((r) => ({ steamid: r.steamid, name: r.name, stats: { ...r.stats, ...wl(r), awards: r.awards } }));

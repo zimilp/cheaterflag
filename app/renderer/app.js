@@ -228,6 +228,26 @@ function matchExtras(m, key, checks) {
           killer ? scrutinizeButton(killer, key, { tier: 'limited', reasons: [] }) : null);
       })) : el('p', { class: 'muted small' }, 'Every kill on you looked normal: seen first, no snaps through walls, no smoke or flashed kills.')));
   }
+  // the same enemy killing several of us in odd ways (not just you): a pattern across the team
+  const myTeam = (m.teams || []).find((t) => t.players.includes(me?.steamid));
+  if (myTeam) {
+    const byKiller = new Map();
+    for (const r of m.results.filter((x) => myTeam.players.includes(x.steamid))) for (const d of r.oddDeaths || []) {
+      const k = byKiller.get(d.killer) || { name: d.killerName, list: [] }; k.list.push({ ...d, victim: r.name, victimId: r.steamid }); byKiller.set(d.killer, k);
+    }
+    const repeat = [...byKiller.entries()].filter(([, k]) => new Set(k.list.map((x) => x.victimId)).size >= 2);
+    if (repeat.length) {
+      out.push(el('div', { class: 'extra' },
+        el('h4', {}, 'Across your team · same player, odd kills on several of you'),
+        el('div', { class: 'deaths' }, repeat.map(([killer, k]) => {
+          const res = m.results.find((r) => r.steamid === killer);
+          return el('div', { class: 'death' },
+            el('div', {}, el('b', {}, k.name || 'someone'), ` — ${k.list.length} odd kills on ${new Set(k.list.map((x) => x.victimId)).size} players`),
+            el('div', { class: 'row watch' }, k.list.slice(0, 6).map((d) => momentButton(`R${d.round} ${d.victim}: ${d.reasons[0]}`, opts, d.tick, killer, `Round ${d.round}: ${k.name} → ${d.victim}`))),
+            res ? scrutinizeButton(res, key, { tier: 'limited', reasons: [] }) : null);
+        }))));
+    }
+  }
   // highlights: members' aces, 4Ks and 1v2+ clutches
   const hl = m.results.filter((r) => (r.steamid === me?.steamid || isMember(checks[r.steamid])) && (r.highlights || []).length);
   if (hl.length) {
@@ -244,6 +264,7 @@ function renderMatches() {
   const list = $('#matchList'); list.replaceChildren();
   const hist = [...(state?.history || [])].sort((a, b) => {
     if (a.playedAt && b.playedAt) return b.playedAt - a.playedAt;
+    if (!!a.playedAt !== !!b.playedAt) return a.playedAt ? -1 : 1;   // unknown play date (old matches): at the bottom
     const ia = matchIdOf(a.demoUrl, a.shareCode, a.keptDemo), ib = matchIdOf(b.demoUrl, b.shareCode, b.keptDemo);
     if (ia != null && ib != null) return ia > ib ? -1 : ia < ib ? 1 : 0;
     return (b.at || 0) - (a.at || 0);
@@ -255,12 +276,17 @@ function renderMatches() {
     const key = m.shareCode || String(m.at);
     const open = matchOpen.has(key) ? matchOpen.get(key) : idx === 0;   // newest match open, the rest collapsed
     const cautions = (m.checks || []).filter((c) => c.tier === 'limited').length;
+    const mine = m.results.find((r) => r.steamid === me?.steamid);
+    const odd = mine ? (mine.oddDeaths || []).length : 0;
+    const myHl = mine ? (mine.highlights || []) : [];
     const banned = (m.checks || []).filter((c) => c.tier === 'rejected').length;
     const chips = el('span', { class: 'chips' },
       flagged.length ? el('span', { class: 'badge rejected' }, `${flagged.length} flagged`) : null,
       banned ? el('span', { class: 'badge rejected' }, `${banned} banned/blacklisted`) : null,
       cautions ? el('span', { class: 'badge limited' }, `${cautions} caution`) : null,
-      !flagged.length && !banned && !cautions ? el('span', { class: 'badge approved' }, 'All clean') : null);
+      !flagged.length && !banned && !cautions ? el('span', { class: 'badge approved' }, 'All clean') : null,
+      odd ? el('span', { class: 'badge odd', title: 'Your deaths that looked off — open the match to replay them' }, `${odd} odd death${odd > 1 ? 's' : ''}`) : null,
+      myHl.length ? el('span', { class: 'badge hl', title: myHl.map((h) => h.what).join(', ') }, '★ ' + myHl.map((h) => h.what).join(', ')) : null);
     const card = el('div', { class: 'card match' + (flagged.length ? ' alert' : '') + (open ? ' open' : '') });
     const body = el('div', { class: 'mbody' });
     const head = el('div', { class: 'mhead', role: 'button', tabindex: '0', onclick: () => { matchOpen.set(key, !card.classList.contains('open')); card.classList.toggle('open'); } },
@@ -692,3 +718,81 @@ async function init() {
   showTab(done ? 'matches' : 'setup');
 }
 init().catch(fail);
+
+// ---------- inhouse 5v5: balance teams (skill + form + ping, one IGL per team)
+const bal = { data: null, picked: new Set(), guests: [], which: 0, last: null };
+try { const s = JSON.parse(localStorage.getItem('balPicked') || '[]'); s.forEach((x) => bal.picked.add(x)); } catch (_) {}
+const balKey = (p) => p.steamid || 'g:' + p.name;
+function balPeople() {
+  const form = new Map((bal.data.form || []).map((p) => [p.steamid, p]));
+  const pings = (bal.data.pings && bal.data.pings.players) || {};
+  const mine = bal.data.mine && bal.data.mine.pops;
+  const ppl = (bal.data.all || []).map((p) => ({ ...Balance.profile(p.name, p.steamid, p, form.get(p.steamid) || null, window.Roles),
+    ping: pings[p.steamid] || (p.steamid === me?.steamid ? mine : null) || null }));
+  for (const g of bal.guests) ppl.push({ ...Balance.profile(g, null, null, null, window.Roles), ping: null });
+  return ppl.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+const balPicked = () => balPeople().filter((p) => bal.picked.has(balKey(p)));
+function renderBalPlayers() {
+  const box = $('#balPlayers'); box.replaceChildren();
+  for (const p of balPeople()) {
+    const k = balKey(p);
+    box.append(el('label', { class: 'balp' + (bal.picked.has(k) ? ' on' : '') },
+      el('input', { type: 'checkbox', checked: bal.picked.has(k) || null, onchange: (e) => {
+        if (e.target.checked) bal.picked.add(k); else bal.picked.delete(k);
+        try { localStorage.setItem('balPicked', JSON.stringify([...bal.picked].filter((x) => !x.startsWith('g:')))); } catch (_) {}
+        bal.which = 0; renderBalPlayers(); renderRegions();
+      } }),
+      el('span', {}, p.name), el('span', { class: 'muted small' }, p.guest ? ' guest' : ` ${p.skill.toFixed(2)}`)));
+  }
+  $('#balCount').textContent = `${bal.picked.size}/10 picked`;
+}
+function renderRegions() {
+  const sel = $('#balRegion'), keep = sel.value;
+  const names = (bal.data.pings && bal.data.pings.names) || (bal.data.mine && bal.data.mine.names) || {};
+  const ranked = Balance.rankRegions(balPicked().length ? balPicked() : balPeople(), names);
+  sel.replaceChildren(el('option', { value: '' }, ranked.length ? `Auto — fairest for these players (${ranked[0].name})` : 'No ping data yet — skill only'),
+    ...ranked.slice(0, 15).map((r) => el('option', { value: r.pop }, `${r.name} — worst ${r.worst} ms, avg ${r.avg} ms (${r.known} players)`)));
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+}
+async function loadBalance() {
+  $('#balPlayers').textContent = 'Loading…';
+  try { bal.data = await cf.balanceData(); } catch (e) { $('#balPlayers').textContent = e.message; return; }
+  renderBalPlayers(); renderRegions();
+}
+function makeTeams() {
+  const players = balPicked();
+  const out = $('#balResult');
+  if (players.length !== 10) { out.replaceChildren(el('p', { class: 'muted' }, `Pick exactly 10 players (${players.length} picked).`)); return; }
+  const names = (bal.data.pings && bal.data.pings.names) || {};
+  const pop = $('#balRegion').value || (Balance.rankRegions(players, names)[0] || {}).pop || null;
+  const r = Balance.balance(players, pop, bal.which);
+  bal.last = { r, names };
+  const col = (label, t, chance) => el('div', { class: 'card balteam' },
+    el('h4', {}, `${label} · avg skill ${t.skill.toFixed(2)}${t.ping != null ? ` · ${t.ping} ms` : ''} · ${chance}% to win`),
+    t.players.map((p) => el('div', { class: 'balrow' },
+      el('div', {}, el('b', {}, p.name), balKey(p) === t.igl ? el('span', { class: 'badge igl' }, '🎙 IGL') : null),
+      el('div', { class: 'muted small' }, p.reason),
+      balKey(p) === t.igl ? el('div', { class: 'small' }, 'Calls the shots: ' + t.iglWhy) : null)));
+  out.replaceChildren(
+    el('p', { class: 'muted small' }, `${pop ? 'Server: ' + (names[pop] || pop) + '. ' : 'No ping data — split on skill only. '}Option ${r.which + 1} of the fairest splits (Shuffle for another).`),
+    el('div', { class: 'balgrid' }, col('Team A', r.A, r.winA), col('Team B', r.B, 100 - r.winA)));
+  $('#balAgain').classList.remove('hidden'); $('#balCopy').classList.remove('hidden');
+}
+$('#balOpen').onclick = async () => { $('#balBody').classList.toggle('hidden'); if (!bal.data) await loadBalance(); };
+$('#balAddGuest').onclick = () => { const n = $('#balGuest').value.trim(); if (!n || !bal.data) return; bal.guests.push(n); bal.picked.add('g:' + n); $('#balGuest').value = ''; renderBalPlayers(); };
+$('#balGo').onclick = () => { bal.which = 0; makeTeams(); };
+$('#balAgain').onclick = () => { bal.which = (bal.which + 1) % 5; makeTeams(); };
+$('#balRegion').onchange = () => { if (bal.last) makeTeams(); };
+$('#balPing').onclick = async (e) => {
+  e.target.disabled = true; e.target.textContent = 'Measuring… (about a minute)';
+  try { await cf.measurePings(); await loadBalance(); } catch (err) { log(err.message); }
+  e.target.disabled = false; e.target.textContent = 'Measure my ping';
+};
+$('#balCopy').onclick = () => {
+  if (!bal.last) return;
+  const { r, names } = bal.last;
+  const t = (label, x) => `${label} (avg ${x.skill.toFixed(2)}${x.ping != null ? `, ${x.ping} ms` : ''}):\n` + x.players.map((p) => `  ${p.name}${balKey(p) === x.igl ? ' (IGL)' : ''} — ${p.reason}`).join('\n');
+  cf.copy(`${r.pop ? 'Server: ' + (names[r.pop] || r.pop) + '\n' : ''}${t('Team A', r.A)}\n${t('Team B', r.B)}`);
+  $('#balCopy').textContent = 'Copied ✓'; setTimeout(() => { $('#balCopy').textContent = 'Copy'; }, 1500);
+};

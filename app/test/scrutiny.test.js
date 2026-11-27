@@ -140,12 +140,12 @@ test('mechanics: triggerbot, no-recoil, spinbot and bhop', () => {
     fires.push({ tick: t, user_steamid: 'me', weapon: 'ak47' });
     fireRows.push({ tick: t, steamid: 'me', pitch: 5 - 2 * (-0.4 * i), yaw: 0, aim_punch_angle: [-0.4 * i, 0, 0] });
   }
-  // a spin: 120°/tick for 40 ticks; and 4 chains of 7 hops 40 ticks apart at 300 u/s
+  // a spin: 120°/tick for 40 ticks; and 4 chains of 9 hops 40 ticks apart at 400 u/s (speed a human can't reach)
   for (let t = 30000; t < 30040; t += 4) samples.push({ tick: t, steamid: 'me', is_alive: true, pitch: 0, yaw: (t * 25) % 360, X: 0, Y: 0 });
-  for (let c = 0; c < 4; c++) for (let j = 0; j < 7; j++) {
+  for (let c = 0; c < 4; c++) for (let j = 0; j < 9; j++) {
     const t = 40000 + c * 2000 + j * 40;
     jumps.push({ tick: t, user_steamid: 'me' });
-    samples.push({ tick: t - 4, steamid: 'me', is_alive: true, pitch: 0, yaw: 0, X: (t - 4) * 300 / 64, Y: 0 }, { tick: t, steamid: 'me', is_alive: true, pitch: 0, yaw: 0, X: t * 300 / 64, Y: 0 });
+    samples.push({ tick: t - 4, steamid: 'me', is_alive: true, pitch: 0, yaw: 0, X: (t - 4) * 400 / 64, Y: 0 }, { tick: t, steamid: 'me', is_alive: true, pitch: 0, yaw: 0, X: t * 400 / 64, Y: 0 });
   }
   const r = mechanicsChecks({ deaths, killWindows, fires, fireRows, samples, jumps, roundStarts: [0] }, 'me', DEEP);
   assert.equal(r.trigEligible, 6); assert.equal(r.trig, 6);

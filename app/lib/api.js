@@ -48,6 +48,8 @@ class Api {
   uploadStatsBatch(matches) { return this.req('POST', '/stats', { matches }); }
   withdrawFlag(shareCode, steamid) { return this.req('POST', '/flags/withdraw', { shareCode, steamid }); }
   squad(names, map) { return this.req('POST', '/squad', { names, map }); }
+  uploadPings(body) { return this.req('POST', '/pings', body); }
+  pings() { return this.req('GET', '/pings'); }
   stats(days = 0) { return this.req('GET', '/stats?days=' + Number(days || 0)); }
 }
 
