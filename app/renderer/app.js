@@ -665,7 +665,10 @@ $('#btnSignIn').addEventListener('click', () => {
 $('#btnLaunch').addEventListener('click', () => cf.applyLaunchOptions().then((r) => {
   if (!r.ok) $('#s2text').textContent = r.reason === 'steam-running'
     ? 'Steam is still open. Click the Steam menu (top-left) → Exit, wait a few seconds, then press "Turn it on" again.'
-    : 'Could not find your Steam settings. Use "Do it myself instead" below.';
+    : r.reason === 'no-permission'
+      ? `Windows won't let CheaterFlag change Steam's settings on this PC (the Steam folder is protected). Set them by hand instead: open Steam → right-click Counter-Strike 2 → Properties → Launch options, and paste this (already copied for you): ${r.needed || '-condebug +exec cheaterflag'}`
+      : 'Could not find your Steam settings. Use "Do it myself instead" below.';
+  if (!r.ok && r.reason === 'no-permission' && r.needed) cf.copy(r.needed);
   else refreshSetup();
 }).catch(fail));
 $('#btnCopyFlags').addEventListener('click', () => cf.copy('-condebug -netconport 2121'));

@@ -231,7 +231,10 @@ function autoConfigure() {
     if (!store.get('cs2Dir')) { const d = steamConfig.findCs2Dir(); if (d) store.set({ cs2Dir: d }); }
     try { tabStatus.apply(store.get('cs2Dir'), store.get('tabStatus') === true, false); if (!clearTimer) tabStatus.queueDemo(store.get('cs2Dir'), null); } catch (_) {}
     const id = store.get('steamid');
-    if (id && !steamConfig.launchOptionsStatus(id).ok) steamConfig.applyLaunchOptions(id); // no-op while Steam runs
+    if (id && !steamConfig.launchOptionsStatus(id).ok) {     // no-op while Steam runs
+      const r = steamConfig.applyLaunchOptions(id, { backupDir: path.join(app.getPath('userData'), 'backups') });
+      if (r.reason === 'no-permission' && !autoConfigure.warned) { autoConfigure.warned = true; send('log', 'Windows blocked CheaterFlag from changing Steam\'s launch options — add them by hand in Setup (step 2).'); }
+    }
     if (gsi && installCfg(store.get('cs2Dir'), gsi.token)) send('log', 'Game-state link installed — it starts working next time CS2 opens.');
   } catch (e) { send('log', 'Auto-setup: ' + e.message); }
 }
@@ -785,7 +788,7 @@ function registerIpc() {
     };
   });
   h('applyLaunchOptions', async () => {
-    const r = steamConfig.applyLaunchOptions(store.get('steamid'));
+    const r = steamConfig.applyLaunchOptions(store.get('steamid'), { backupDir: path.join(app.getPath('userData'), 'backups') });
     if (r.ok) { const d = steamConfig.findCs2Dir(); if (d) store.set({ cs2Dir: d }); startServices(); }
     return r;
   });

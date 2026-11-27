@@ -156,7 +156,10 @@ function launchOptionsStatus(steamid64) {
 }
 
 /** Adds the flags. Returns {ok} or {ok:false, reason:'steam-running'|'not-found'|...}. */
-function applyLaunchOptions(steamid64) {
+/** Steam's folder can be write-protected (read-only file, folder permissions, antivirus "controlled folder access"). */
+const blocked = (e) => e && (e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'EBUSY');
+
+function applyLaunchOptions(steamid64, { backupDir = null } = {}) {
   if (isSteamRunning()) return { ok: false, reason: 'steam-running' };
   const file = localConfigPath(steamid64);
   if (!file) return { ok: false, reason: 'not-found' };
@@ -166,10 +169,20 @@ function applyLaunchOptions(steamid64) {
   const before = node.LaunchOptions || '';
   const after = mergeLaunchOptions(before);
   if (after === before.trim()) return { ok: true, changed: false };
-  const backup = file + '.cheaterflag-backup';
-  if (!fs.existsSync(backup)) fs.writeFileSync(backup, text);
+  // backup of Steam's settings, kept in CheaterFlag's own folder (never inside Steam's); a failed backup never blocks setup
+  try {
+    const dir = backupDir || path.dirname(file);
+    fs.mkdirSync(dir, { recursive: true });
+    const backup = path.join(dir, `localconfig-${steamid64}.vdf.cheaterflag-backup`);
+    if (!fs.existsSync(backup)) fs.writeFileSync(backup, text);
+  } catch (_) {}
   node.LaunchOptions = after;
-  fs.writeFileSync(file, writeVdf(root));
+  try { fs.writeFileSync(file, writeVdf(root)); }
+  catch (e) {
+    if (!blocked(e)) throw e;
+    try { fs.chmodSync(file, 0o666); fs.writeFileSync(file, writeVdf(root)); }   // read-only file: clear the flag and retry once
+    catch (e2) { if (blocked(e2)) return { ok: false, reason: 'no-permission', file, needed: after }; throw e2; }
+  }
   return { ok: true, changed: true, launchOptions: after };
 }
 
