@@ -226,7 +226,7 @@ function startServices() {
 function autoConfigure() {
   try {
     if (!store.get('cs2Dir')) { const d = steamConfig.findCs2Dir(); if (d) store.set({ cs2Dir: d }); }
-    try { tabStatus.apply(store.get('cs2Dir'), store.get('tabStatus') === true, false); } catch (_) {}
+    try { tabStatus.apply(store.get('cs2Dir'), store.get('tabStatus') === true, false); if (!clearTimer) tabStatus.queueDemo(store.get('cs2Dir'), null); } catch (_) {}
     const id = store.get('steamid');
     if (id && !steamConfig.launchOptionsStatus(id).ok) steamConfig.applyLaunchOptions(id); // no-op while Steam runs
     if (gsi && installCfg(store.get('cs2Dir'), gsi.token)) send('log', 'Game-state link installed — it starts working next time CS2 opens.');
@@ -570,11 +570,25 @@ async function replayMoment(opts) {
   const cacheFile = path.join(app.getPath('userData'), 'replays', path.basename(demo, '.dem') + '.bg.json');
   if (!bg) try { bg = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
   say(bg ? 'Loading the moment…' : 'Reading the demo (first time for this match takes a few seconds)…');
-  const out = await runReplay(demo, { tick: Number(opts.tick) || 0, focus: opts.steamid ? String(opts.steamid) : null, bg: bg || null });
+  const out = await runReplay(demo, { tick: Number(opts.tick) || 0, focus: opts.steamid ? String(opts.steamid) : null, bg: bg || null, toRoundEnd: !!opts.toRoundEnd });
   if (!bg) { try { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(out.bg)); } catch (_) {} }
   replayBg.set(demo, out.bg);
   if (replayBg.size > 6) replayBg.delete(replayBg.keys().next().value);
   return out.replay;
+}
+
+let clearTimer = null;
+/** Empty the one-shot watch file once CS2 has been running a while (or after 4 minutes if it never started). */
+function clearQueuedDemoWhenStarted(cs2) {
+  clearInterval(clearTimer);
+  const started = Date.now(); let runningSince = null;
+  clearTimer = setInterval(() => {
+    if (isCs2Running()) runningSince = runningSince || Date.now(); 
+    if ((runningSince && Date.now() - runningSince > 60000) || Date.now() - started > 240000) {
+      clearInterval(clearTimer); clearTimer = null;
+      try { tabStatus.queueDemo(cs2, null); } catch (_) {}
+    }
+  }, 5000);
 }
 
 let watching = false;
@@ -596,12 +610,15 @@ async function watchDemo({ demoPath, demoUrl, key, tick, steamid }) {
     if (steamid) jump.push(`spec_player_by_accountid ${(BigInt(steamid) - STEAM64_BASE).toString()}`);
     const jumpCmd = jump.join('; ');
     if (!isCs2Running()) {
-      const steamExe = steamConfig.steamDir() ? path.join(steamConfig.steamDir(), 'steam.exe') : null;
-      if (steamExe && fs.existsSync(steamExe)) {
-        require('child_process').spawn(steamExe, ['-applaunch', '730', '+playdemo', `cheaterflag/${name}`], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-      } else shell.openExternal(`steam://run/730//+playdemo cheaterflag/${name}`);
+      // CS2 runs cheaterflag.cfg at start-up (launch option + autoexec): queue the demo there and start CS2 normally.
+      // Steam can silently hold or block launches that carry extra commands, so no command-line arguments are used.
+      const cs2 = store.get('cs2Dir') || steamConfig.findCs2Dir();
+      tabStatus.apply(cs2, store.get('tabStatus') === true, false);
+      tabStatus.queueDemo(cs2, name);
+      clearQueuedDemoWhenStarted(cs2);
+      shell.openExternal('steam://run/730');
       clipboard.writeText(jumpCmd);
-      send('watch', 'Starting CS2 straight into the demo (takes about a minute). When it\'s playing, press ~ (console), Ctrl+V, Enter to jump to the moment.');
+      send('watch', 'Starting CS2 — it opens the demo by itself (about a minute). Then press ~ (console), Ctrl+V, Enter to jump to the moment.');
       return { ok: true, launched: true, play, jump: jumpCmd };
     }
     clipboard.writeText(play);

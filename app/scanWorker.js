@@ -8,9 +8,9 @@ process.parentPort.on('message', (e) => {
   const { id, demoPath, deep, statsOnly } = e.data;
   if (e.data.replay) {   // in-app 2D replay of one moment
     try {
-      const { tick, focus, bg } = e.data.replay;
+      const { tick, focus, bg, toRoundEnd } = e.data.replay;
       const background = bg || replay.demoBackground(demoPath);
-      process.parentPort.postMessage({ id, ok: true, scan: { replay: replay.buildReplay(demoPath, tick, focus, background), bg: background } });
+      process.parentPort.postMessage({ id, ok: true, scan: { replay: replay.buildReplay(demoPath, tick, focus, background, { toRoundEnd: !!toRoundEnd }), bg: background } });
     } catch (err) { process.parentPort.postMessage({ id, ok: false, error: String(err && err.message || err) }); }
     return;
   }

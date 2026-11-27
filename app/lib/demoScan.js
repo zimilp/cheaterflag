@@ -58,6 +58,35 @@ function roundAt(tick, roundStarts) {
  *   killWindows: rows for ticks around kills (same shape),
  * }
  */
+/** An HE grenade blows a smoke open for a moment, but the game still marks kills through that spot as "through
+ *  smoke". True when an HE went off near the killer→victim line in the 3 s before the kill. */
+function nadeOpenedSmoke(d, data, at) {
+  const a = at(d.tick - 1, d.attacker_steamid), v = at(d.tick - 1, d.user_steamid);
+  if (!a || !v) return false;
+  for (const n of data.nades || []) {
+    if (n.tick > d.tick || d.tick - n.tick > 64 * 3) continue;
+    const dx = v.X - a.X, dy = v.Y - a.Y, len2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((n.x - a.X) * dx + (n.y - a.Y) * dy) / len2));
+    if (Math.hypot(a.X + t * dx - n.x, a.Y + t * dy - n.y) <= 350) return true;
+  }
+  return false;
+}
+
+/** The game marks a kill "through smoke" even when the shot only clips the thin edge of a smoke. Count it only if
+ *  the shot line passes within the dense core (radius ~144 units) of a smoke that was out at the time.
+ *  Without smoke positions (older data) the game's flag is trusted. */
+function throughSmokeCore(d, data, at) {
+  if (!data.smokes) return true;
+  const a = at(d.tick - 1, d.attacker_steamid), v = at(d.tick - 1, d.user_steamid);
+  if (!a || !v) return true;
+  const dx = v.X - a.X, dy = v.Y - a.Y, len2 = dx * dx + dy * dy || 1;
+  return data.smokes.some((s) => {
+    if (s.tick > d.tick || d.tick > s.end) return false;
+    const t = Math.max(0, Math.min(1, ((s.x - a.X) * dx + (s.y - a.Y) * dy) / len2));
+    return Math.hypot(a.X + t * dx - s.x, a.Y + t * dy - s.y) <= 144;
+  });
+}
+
 function analyze(data, T = THRESHOLDS) {
   const stats = new Map();
   for (const p of data.players) {
@@ -191,19 +220,27 @@ function analyze(data, T = THRESHOLDS) {
         if (Number(d.penetrated) > 0 && !d.thrusmoke) { st.unseenWallbangs += 1; st.rounds.add(round); st.moments.push({ tick: d.tick - 128, round, what: 'Wallbang kill on an unseen enemy' }); why.push('wallbanged you without ever seeing you'); }
       } else if (firstSpot > d.tick - 64) {
         st.reactions.push(d.tick - firstSpot);
-        // tracked you through the wall just before you came into view?
-        let on = 0, first = null, last = null;
-        for (let t = Math.max(d.tick - 64, firstSpot - 24); t < firstSpot; t++) {
-          const a = at(t, d.attacker_steamid), v = at(t, d.user_steamid);
-          if (!a || !v) continue;
-          first = first || a; last = a;
+        // tracked you through the wall before you came into view? Only the time before the "spotted" flag's lag
+        // counts (just before being marked seen you usually already were visible), and the crosshair has to have
+        // followed you across their view for ~1 s — holding the one angle you walk into is not tracking.
+        const shooter = sid(d.attacker_steamid), victim = sid(d.user_steamid), until = firstSpot - T.spotLagTicks;
+        const on = [];
+        for (const t of [...sampleTicks.keys()].filter((t) => t < until && t >= until - 160).sort((x, y) => y - x)) {
+          const rows = sampleTicks.get(t), a = rows.get(shooter), v = rows.get(victim);
+          if (!a || !v || !a.is_alive || !v.is_alive) break;
+          const vs = spottedSet(v); if (vs && vs.has(shooter)) break;
           const dist = distance(a, v);
-          if (dist > T.trackMinDistance && aimError(a, v) <= Math.min(T.trackMaxError, Math.atan(T.trackBodyUnits / dist) * 180 / Math.PI)) on += 1;
+          if (dist <= T.trackMinDistance || aimError(a, v) > Math.min(T.trackMaxError, Math.atan(T.trackBodyUnits / dist) * 180 / Math.PI)) break;
+          on.unshift({ a, v });
         }
-        if (on >= 12 && first && last && viewDelta(first, last) >= 4) why.push('followed you through the wall before you were visible');
+        if (on.length >= T.trackMinStreak) {
+          const f = on[0], l = on[on.length - 1];
+          if (angleBetween(bearing(f.a, f.v), bearing(l.a, l.v)) >= T.trackMinSweep && viewDelta(f.a, l.a) >= T.trackMinTurn)
+            why.push('followed you through the wall before you were visible');
+        }
       }
     }
-    if (d.thrusmoke) why.push('through smoke');
+    if (d.thrusmoke && throughSmokeCore(d, data, at) && !nadeOpenedSmoke(d, data, at)) why.push('through smoke');
     if (d.attackerblind) why.push('while they were flashed');
     if (why.length && deathLog.has(vic)) deathLog.get(vic).odd.push({ tick: d.tick - 192, round, killer: sid(d.attacker_steamid), killerName: names.get(sid(d.attacker_steamid)) || '', weapon: d.weapon || '', reasons: why });
   }
@@ -338,7 +375,14 @@ function scanDemo(demoPath, T = THRESHOLDS) {
   };
   const samples = ticks(sampleList);
   const killWindows = ticks([...windowSet]);
-  const results = analyze({ players, deaths, roundStarts, samples, killWindows }, T);
+  let nades = [];
+  try { nades = (dp.parseEvent(demoPath, 'hegrenade_detonate') || []).map((e) => ({ tick: e.tick, x: Number(e.x), y: Number(e.y) })); } catch (_) {}
+  let smokes = null;
+  try {
+    const ends = new Map((dp.parseEvent(demoPath, 'smokegrenade_expired') || []).map((e) => [Math.round(e.x) + ',' + Math.round(e.y), e.tick]));
+    smokes = (dp.parseEvent(demoPath, 'smokegrenade_detonate') || []).map((e) => ({ tick: e.tick, x: Number(e.x), y: Number(e.y), end: ends.get(Math.round(e.x) + ',' + Math.round(e.y)) || e.tick + 64 * 22 }));
+  } catch (_) {}
+  const results = analyze({ players, deaths, roundStarts, samples, killWindows, nades, smokes }, T);
   // fun stats for the Stats tab (never allowed to break detection)
   try {
     const stats = require('./matchStats').parseStats(demoPath, { players, deaths, roundStarts, samples });
@@ -647,11 +691,18 @@ function deepScan(demoPath, steamid, T = DEEP) {
   try { fires = (dp.parseEvent(demoPath, 'weapon_fire') || []).filter((f) => sid(f.user_steamid) === sid(steamid)); } catch (_) {}
   try { jumps = (dp.parseEvent(demoPath, 'player_jump') || []).filter((j) => sid(j.user_steamid) === sid(steamid)); } catch (_) {}
   try { if (fires.length) fireRows = dp.parseTicks(demoPath, ['pitch', 'yaw', 'aim_punch_angle'], [...new Set(fires.map((f) => f.tick))]); } catch (_) {}
-  return deepAnalyze({ players, deaths, roundStarts, samples, killWindows, plants, beginPlants, fires, jumps, fireRows }, steamid, T);
+  let nades = [];
+  try { nades = (dp.parseEvent(demoPath, 'hegrenade_detonate') || []).map((e) => ({ tick: e.tick, x: Number(e.x), y: Number(e.y) })); } catch (_) {}
+  let smokes = null;
+  try {
+    const ends = new Map((dp.parseEvent(demoPath, 'smokegrenade_expired') || []).map((e) => [Math.round(e.x) + ',' + Math.round(e.y), e.tick]));
+    smokes = (dp.parseEvent(demoPath, 'smokegrenade_detonate') || []).map((e) => ({ tick: e.tick, x: Number(e.x), y: Number(e.y), end: ends.get(Math.round(e.x) + ',' + Math.round(e.y)) || e.tick + 64 * 22 }));
+  } catch (_) {}
+  return deepAnalyze({ players, deaths, roundStarts, samples, killWindows, plants, beginPlants, fires, jumps, fireRows, nades, smokes }, steamid, T);
 }
 
 // Bump these whenever detection changes: every app then re-scans its matches (SCANNER_VERSION) and re-checks every
 // player it scrutinized (SCRUTINY_VERSION). test/versions.test.js fails if the rules change without a bump.
-const SCANNER_VERSION = 7;   // 7: allow for the lag of CS2's "spotted" flag in wall-tracking. 6: "how did I die", players who left early, highlights, economy
+const SCANNER_VERSION = 8;   // 8: death notes: "followed you" needs a real track (not the spotted-flag lag); "through smoke" needs the smoke core and no HE that just opened it. 7: allow for the lag of CS2's "spotted" flag in wall-tracking. 6: "how did I die", players who left early, highlights, economy
 const SCRUTINY_VERSION = 3;  // 3: spotted-flag lag allowance (via wall-tracking); 2: bomb reads (with habits), triggerbot, no-recoil, spinbot/rage, bhop
 module.exports = { addLeavers, bombReads, mechanicsChecks, analyze, scanDemo, judge, applyScrutiny, deepAnalyze, deepScan, THRESHOLDS, STRICT, DEEP, SCANNER_VERSION, SCRUTINY_VERSION };

@@ -153,14 +153,34 @@ function watchResult(r) {
   const btn = (label, text) => el('button', { class: 'watchCopy', onclick: (e) => { cf.copy(text); e.target.textContent = 'Copied ✓'; setTimeout(() => { e.target.textContent = label; }, 1500); } }, label);
   if (r.running) bar.append(btn('Copy load', r.play));
   bar.append(btn('Copy jump', r.jump));
+  cs2Steps(r, btn);
+}
+/** A pop-up with the CS2 steps, so they can't be missed (the bar sits at the top of the page). */
+function cs2Steps(r, btn) {
+  CFReplay.close();
+  const box = el('div', { class: 'rp-box rp-loading' },
+    el('div', { class: 'rp-head' }, el('b', {}, 'Watch in CS2'), el('span', { class: 'rp-sp' }), el('button', { class: 'rp-x', onclick: () => wrap.remove() }, '✕')),
+    el('div', { class: 'rp-msg' },
+      r.launched
+        ? el('ol', { class: 'cs2steps' },
+            el('li', {}, 'CS2 is starting and opens the demo by itself (about a minute).'),
+            el('li', {}, 'When the demo is playing, press ', el('b', {}, '~'), ' to open the console.'),
+            el('li', {}, 'Press ', el('b', {}, 'Ctrl+V'), ' then ', el('b', {}, 'Enter'), ' — that jumps to the moment (already copied).'))
+        : el('ol', { class: 'cs2steps' },
+            el('li', {}, 'In CS2, press ', el('b', {}, '~'), ' for the console. ', btn('Copy load', r.play), ' then Ctrl+V, Enter.'),
+            el('li', {}, 'When the demo is playing: ', btn('Copy jump', r.jump), ' then Ctrl+V, Enter in the console.')),
+      el('p', { class: 'muted small' }, 'No console? CS2 Settings → Game → Enable Developer Console: Yes.'),
+      r.launched ? el('p', { class: 'small' }, 'If CS2 reaches the menu without opening the demo: ~, then ', btn('Copy load', r.play), ' Ctrl+V, Enter — then ', btn('Copy jump', r.jump), ' the same way.') : null));
+  const wrap = el('div', { id: 'replayModal', onclick: (e) => { if (e.target === wrap) wrap.remove(); } }, box);
+  document.body.append(wrap);
 }
 /** In-app 2D replay of a moment (falls back to the CS2 message bar on errors). */
 let replayBusy = false;
-function openReplay(opts, tick, steamid, title) {
+function openReplay(opts, tick, steamid, title, extra = {}) {
   if (replayBusy) return; replayBusy = true;
   const say = CFReplay.loading('Opening the replay…');
   const off = (m) => say(m); replayListeners.add(off);
-  cf.replayMoment({ ...opts, tick, steamid }).then((data) => {
+  cf.replayMoment({ ...opts, ...extra, tick, steamid }).then((data) => {
     CFReplay.open(data, { me: me?.steamid, title, onWatchCs2: () => { CFReplay.close(); watchInCs2(opts, tick, steamid); } });
   }).catch((e) => say('Could not open the replay: ' + (e.message || e))).finally(() => { replayBusy = false; replayListeners.delete(off); });
 }
@@ -171,9 +191,9 @@ function watchInCs2(opts, tick, steamid) {
   cf.watchDemo({ ...opts, tick, ...(steamid ? { steamid } : {}) }).then(watchResult).catch((e) => { $('#watchMsg').textContent = e.message; });
 }
 /** ▶ opens the in-app replay; the small CS2 button opens the same moment in the game. */
-function momentButton(label, opts, tick, steamid, title) {
+function momentButton(label, opts, tick, steamid, title, extra) {
   return el('span', { class: 'moment' },
-    el('button', { onclick: () => openReplay(opts, tick, steamid, title), title: 'Replay this moment here (top-down view)' }, '▶ ' + label),
+    el('button', { onclick: () => openReplay(opts, tick, steamid, title, extra), title: 'Replay this moment here (top-down view)' }, '▶ ' + label),
     el('button', { class: 'cs2', onclick: () => watchInCs2(opts, tick, steamid), title: 'Open this moment in CS2 (first-person)' }, 'CS2'));
 }
 function watchButtons(moments, opts) {
@@ -212,7 +232,7 @@ function matchExtras(m, key, checks) {
   const hl = m.results.filter((r) => (r.steamid === me?.steamid || isMember(checks[r.steamid])) && (r.highlights || []).length);
   if (hl.length) {
     out.push(el('div', { class: 'extra' }, el('h4', {}, 'Highlights'),
-      el('div', { class: 'row watch' }, hl.flatMap((r) => r.highlights.map((h) => momentButton(`${r.name}: ${h.what} (round ${h.round})`, opts, h.tick, r.steamid, `${r.name}: ${h.what}`))))));
+      el('div', { class: 'row watch' }, hl.flatMap((r) => r.highlights.map((h) => momentButton(`${r.name}: ${h.what} (round ${h.round})`, opts, h.tick, r.steamid, `${r.name}: ${h.what}`, { toRoundEnd: true }))))));
   }
   return out;
 }

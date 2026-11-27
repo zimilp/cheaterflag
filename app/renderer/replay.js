@@ -58,13 +58,18 @@
     for (const s of st) if (s.alive && data.players[s.i].team !== data.players[data.focus].team) { const e = aimError(me, s); if (e < bestErr) { bestErr = e; best = s.i; } }
     return best;
   }
-  /** Focus player's aim error to the target over the whole window: [{t, err, seen}]. */
+  /** Focus player's aim error over the window: [{t, err, seen, v}], measured against the victim of their next kill
+   *  (so a clutch shows each fight in turn), or the fight target when they don't kill anyone. */
   function aimTrace(data, target) {
-    if (data.focus == null || target == null) return [];
+    if (data.focus == null) return [];
+    const kills = data.events.filter((e) => e.type === 'kill' && e.a === data.focus && e.v != null).sort((x, y) => x.t - y.t);
     return data.frames.map((fr) => {
-      const a = fr.p.find((r) => r[0] === data.focus), b = fr.p.find((r) => r[0] === target);
+      const next = kills.find((k) => k.t >= fr.t && k.t - fr.t <= 64 * 6);
+      const v = next ? next.v : (kills.length ? null : target);
+      if (v == null) return null;
+      const a = fr.p.find((r) => r[0] === data.focus), b = fr.p.find((r) => r[0] === v);
       if (!a || !b || !a[5] || !b[5]) return null;
-      return { t: fr.t, err: aimError({ x: a[1], y: a[2], yaw: a[3] }, { x: b[1], y: b[2] }), seen: !!(b[7] & (1 << data.focus)) };
+      return { t: fr.t, v, err: aimError({ x: a[1], y: a[2], yaw: a[3] }, { x: b[1], y: b[2] }), seen: !!(b[7] & (1 << data.focus)) };
     }).filter(Boolean);
   }
 
@@ -166,15 +171,16 @@
       const X = (t) => (t - data.from) / (data.to - data.from) * W, Y = (e) => H - 6 - Math.min(90, e) / 90 * (H - 12);
       tg.strokeStyle = '#262b36'; for (const d of [0, 30, 60, 90]) { tg.beginPath(); tg.moveTo(0, Y(d)); tg.lineTo(W, Y(d)); tg.stroke(); }
       for (let i = 1; i < trace.length; i++) {
-        const a = trace[i - 1], b = trace[i]; if (b.t - a.t > 8) continue;
+        const a = trace[i - 1], b = trace[i]; if (b.t - a.t > 8 || a.v !== b.v) continue;
         tg.strokeStyle = b.seen ? '#2fbf71' : '#ff4d4f'; tg.lineWidth = 2;
         tg.beginPath(); tg.moveTo(X(a.t), Y(a.err)); tg.lineTo(X(b.t), Y(b.err)); tg.stroke();
       }
       tg.fillStyle = '#e7e9ee'; tg.fillRect(X(tick) - 0.5, 0, 1, H);
       tg.fillStyle = '#8a92a3'; tg.font = '10px Segoe UI'; tg.fillText('90°', 2, Y(90) + 10); tg.fillText('0° = on target', 2, H - 8);
     }
-    q('.rp-trace-note').innerHTML = tp ? `Aim distance from <b></b> over time. <span style="color:#2fbf71">Green</span> = visible to the suspect, <span style="color:#ff4d4f">red</span> = hidden. A near-vertical drop to 0° is a snap; a flat red line near 0° is tracking through a wall.` : '';
-    if (tp) q('.rp-trace-note b').textContent = tp.name;
+    const victims = [...new Set(trace.map((x) => x.v))];
+    q('.rp-trace-note').innerHTML = trace.length ? `Aim distance from ${victims.length > 1 ? 'each victim in turn' : '<b></b>'} over time. <span style="color:#2fbf71">Green</span> = visible to the suspect, <span style="color:#ff4d4f">red</span> = hidden. A near-vertical drop to 0° is a snap; a flat red line near 0° is tracking through a wall.` : '';
+    const tb = q('.rp-trace-note b'); if (tb) tb.textContent = data.players[victims[0]] ? data.players[victims[0]].name : (tp ? tp.name : '');
 
     function draw() {
       g.clearRect(0, 0, box.width, box.height);

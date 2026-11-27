@@ -13,7 +13,7 @@ const scanPrint = hash(D.THRESHOLDS, D.STRICT, D.analyze, D.judge, D.applyScruti
 const deepPrint = hash(D.DEEP, D.deepAnalyze, D.bombReads, D.mechanicsChecks);
 
 const KNOWN = {
-  scanner: { [D.SCANNER_VERSION]: 'd52be70ea4a1' },
+  scanner: { [D.SCANNER_VERSION]: '154488e72def' },
   scrutiny: { [D.SCRUTINY_VERSION]: '24d34d28132b' },
 };
 

@@ -4,7 +4,7 @@
 // so no game files are needed and every map (including new ones) works.
 
 const CELL = 48;              // map outline resolution in game units
-const BEFORE = 64 * 5, AFTER = 64 * 5, STEP = 2;
+const BEFORE = 64 * 5, AFTER = 64 * 5, STEP = 2, MAX_SPAN = 64 * 90;
 
 function sid(v) { return v == null ? null : String(v); }
 function spottedList(v) {
@@ -77,13 +77,21 @@ function demoBackground(demoPath) {
   return { map: header.map_name || null, floor: buildFloor(pts), sites: sitesFrom(plants) };
 }
 
-/** One moment: frames from ~5 s before to ~5 s after `tick`. */
-function buildReplay(demoPath, tick, focus, bg = null) {
+/** One moment: frames from ~5 s before to ~5 s after `tick` — or, with { toRoundEnd }, until the round is over
+ *  (clutches, 4Ks and aces take longer than 10 s). */
+function buildReplay(demoPath, tick, focus, bg = null, opts = {}) {
   const dp = require('@laihoe/demoparser2');
   bg = bg || demoBackground(demoPath);
   const players = dp.parsePlayerInfo(demoPath).map((p) => ({ steamid: sid(p.steamid), name: p.name }));
-  const from = Math.max(0, Math.floor(tick) - BEFORE), to = Math.floor(tick) + AFTER;
-  const ticks = []; for (let t = from; t <= to; t += STEP) ticks.push(t);
+  const from = Math.max(0, Math.floor(tick) - BEFORE);
+  let to = Math.floor(tick) + AFTER;
+  if (opts.toRoundEnd) {
+    const ends = safeEvent(dp, demoPath, 'round_end').map((e) => e.tick).filter((t) => t > tick).sort((a, b) => a - b);
+    if (ends.length) to = Math.min(ends[0] + 64 * 2, from + MAX_SPAN);
+  }
+  to = Math.max(to, Math.floor(tick) + AFTER);
+  const step = to - from > 64 * 30 ? STEP * 2 : STEP;    // long windows: every 4 ticks is still smooth
+  const ticks = []; for (let t = from; t <= to; t += step) ticks.push(t);
   const rows = dp.parseTicks(demoPath, ['X', 'Y', 'pitch', 'yaw', 'is_alive', 'health', 'team_num', 'approximate_spotted_by'], ticks) || [];
   const team = {}; for (const r of rows) if (r.team_num) team[sid(r.steamid)] = Number(r.team_num);
   const list = players.filter((p) => team[p.steamid] === 2 || team[p.steamid] === 3).map((p) => ({ ...p, team: team[p.steamid] === 3 ? 'CT' : 'T' }));

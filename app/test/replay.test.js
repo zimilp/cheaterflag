@@ -70,3 +70,41 @@ test('wall-tracking: a long track through a wall counts; one the spotted flag wa
   assert.equal(wallOf(trackData({ spotAfter: 104 })), 0);        // hidden ~1.6 s, but the last 0.5 s was flag lag: what is left is too short to count
   assert.equal(wallOf(trackData({ spotAfter: 200 })), 1);        // hidden for 3 s before being seen: still counts
 });
+
+// ---- "How you died": "followed you through the wall" needs a real track, not the spotted flag's lag
+function deathData({ hiddenTrackTicks }) {
+  // victim v walks sideways 1200 units in front of killer k; k's crosshair follows v the whole time.
+  // v becomes "spotted" by k at tick 600 and dies at tick 630. Before that v was hidden for hiddenTrackTicks
+  // (earlier than that, k was looking elsewhere).
+  const players = [{ steamid: 'k', name: 'K' }, { steamid: 'v', name: 'V' }];
+  const row = (t) => {
+    const v = { X: 1200, Y: -1200 + 2 * t, Z: 0 };
+    const tracking = t >= 600 - hiddenTrackTicks;
+    const yaw = tracking ? Math.atan2(v.Y, v.X) * 180 / Math.PI : 120;
+    return [{ tick: t, steamid: 'k', X: 0, Y: 0, Z: 0, pitch: 0, yaw, is_alive: true, team_num: 2, approximate_spotted_by: [] },
+            { tick: t, steamid: 'v', ...v, pitch: 0, yaw: 180, is_alive: true, team_num: 3, approximate_spotted_by: t >= 600 ? ['k'] : [] }];
+  };
+  const samples = [], killWindows = [];
+  for (let t = 0; t <= 630; t += 8) samples.push(...row(t));
+  for (let t = 566; t <= 630; t++) killWindows.push(...row(t));
+  return { players, deaths: [{ tick: 630, attacker_steamid: 'k', user_steamid: 'v', weapon: 'ak47', penetrated: 0 }], roundStarts: [0], samples, killWindows };
+}
+const followed = (d) => ((analyze(d, THRESHOLDS).find((r) => r.steamid === 'v') || {}).oddDeaths || []).some((o) => o.reasons.some((x) => /followed you/.test(x)));
+test('how you died: holding the angle you walk into is not "followed you through the wall"; a long track is', () => {
+  assert.equal(followed(deathData({ hiddenTrackTicks: 24 })), false);    // only the flag-lag half second
+  assert.equal(followed(deathData({ hiddenTrackTicks: 200 })), true);    // tracked ~3 s through the wall
+});
+
+// ---- "through smoke" only when the shot crosses the smoke's core and no HE had just blown it open
+function smokeDeath(extra) {
+  const players = [{ steamid: 'k', name: 'K' }, { steamid: 'v', name: 'V' }];
+  const rows = [{ tick: 999, steamid: 'k', X: 0, Y: 0, Z: 0, pitch: 0, yaw: 0, is_alive: true, team_num: 2 }, { tick: 999, steamid: 'v', X: 1000, Y: 0, Z: 0, pitch: 0, yaw: 180, is_alive: true, team_num: 3 }];
+  return { players, deaths: [{ tick: 1000, attacker_steamid: 'k', user_steamid: 'v', weapon: 'ak47', thrusmoke: true, penetrated: 0 }], roundStarts: [0], samples: [], killWindows: rows, ...extra };
+}
+const smokeNote = (d) => ((analyze(d, THRESHOLDS).find((r) => r.steamid === 'v') || {}).oddDeaths || []).some((o) => o.reasons.includes('through smoke'));
+test('through smoke: core only, and not right after an HE opened it', () => {
+  assert.equal(smokeNote(smokeDeath({ smokes: [{ tick: 500, end: 2000, x: 500, y: 60 }] })), true);     // through the middle
+  assert.equal(smokeNote(smokeDeath({ smokes: [{ tick: 500, end: 2000, x: 500, y: 190 }] })), false);   // only clips the edge
+  assert.equal(smokeNote(smokeDeath({ smokes: [{ tick: 500, end: 900, x: 500, y: 60 }] })), false);     // smoke already gone
+  assert.equal(smokeNote(smokeDeath({ smokes: [{ tick: 500, end: 2000, x: 500, y: 60 }], nades: [{ tick: 900, x: 520, y: 40 }] })), false); // HE blew it open
+});

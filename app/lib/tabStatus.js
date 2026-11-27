@@ -7,6 +7,11 @@ const fs = require('fs');
 const path = require('path');
 
 const CFG = 'cheaterflag.cfg';
+// "Watch in CS2": a one-shot file cheaterflag.cfg runs at start-up. It holds `playdemo …` while a demo is waiting
+// to be opened and is emptied again once CS2 has started, so normal launches are unaffected.
+const WATCH = 'cheaterflag_watch.cfg';
+const WATCH_IDLE = '// CheaterFlag: empty unless you clicked "Watch in CS2" (then it opens that demo once).\n';
+const EXEC_WATCH = '\nexec cheaterflag_watch\n';
 const ON = [
   '// CheaterFlag: holding TAB (scoreboard) also lists the players in the console, so the Lobby tab sees everyone.',
   '// Turn it off in CheaterFlag > Settings. Your scoreboard works exactly as before.',
@@ -23,7 +28,8 @@ function apply(cs2Dir, enabled, wasEnabled = false) {
   if (!cs2Dir) return false;
   const dir = path.join(cs2Dir, 'cfg');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, CFG), enabled ? ON : wasEnabled ? RESTORE : OFF);
+  fs.writeFileSync(path.join(dir, CFG), (enabled ? ON : wasEnabled ? RESTORE : OFF) + EXEC_WATCH);
+  if (!fs.existsSync(path.join(dir, WATCH))) fs.writeFileSync(path.join(dir, WATCH), WATCH_IDLE);
   const auto = path.join(dir, 'autoexec.cfg');
   let text = '';
   try { text = fs.readFileSync(auto, 'utf8'); } catch (_) {}
@@ -31,4 +37,13 @@ function apply(cs2Dir, enabled, wasEnabled = false) {
   return true;
 }
 
-module.exports = { apply, CFG, ON, OFF, RESTORE };
+/** Queue a demo to open when CS2 next starts (null clears it). */
+function queueDemo(cs2Dir, demoName) {
+  if (!cs2Dir) return false;
+  const dir = path.join(cs2Dir, 'cfg');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, WATCH), demoName ? `// CheaterFlag: opens this demo once, then CheaterFlag empties this file.\nplaydemo cheaterflag/${demoName}\n` : WATCH_IDLE);
+  return true;
+}
+
+module.exports = { apply, queueDemo, CFG, WATCH, ON, OFF, RESTORE };
