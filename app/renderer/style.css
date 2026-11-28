@@ -253,3 +253,5 @@ table.stats tbody tr:hover td { background:#1a1f2a; }
 .smokeitem img { width:128px; aspect-ratio:16/9; object-fit:cover; border-radius:4px; display:block; background:#000; }
 .smokeitem .sititle { font-weight:600; font-size:13px; margin-bottom:2px; }
 @media (max-width: 1050px) { .smokelayout { grid-template-columns:1fr; } .smokeplayer { position:static; } .smokelist { max-height:none; } }
+#balBody > .row { margin-top:12px; }
+#balBody > .balplayers { margin-bottom:4px; }

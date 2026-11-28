@@ -63,13 +63,14 @@ function runReplay(demoPath, replay) {
 
 // ---------- window + tray
 function createWindow() {
-  if (win && !win.isDestroyed()) { win.show(); win.focus(); return; }
+  if (win && !win.isDestroyed()) { win.maximize(); win.show(); win.focus(); return; }
   win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 980, minHeight: 640, backgroundColor: '#0f1115', title: 'CheaterFlag', autoHideMenuBar: true,
+    show: false, width: 1440, height: 900, minWidth: 980, minHeight: 640, backgroundColor: '#0f1115', title: 'CheaterFlag', autoHideMenuBar: true,
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  win.once('ready-to-show', () => { win.maximize(); win.show(); });   // always opens filling the screen
   win.on('close', (e) => { if (!app.isQuitting) { e.preventDefault(); win.hide(); } });
 }
 
