@@ -56,3 +56,12 @@ test('ping: reads the average from Windows ping output', () => {
   assert.equal(parsePing('Request timed out.'), null);
   assert.equal(parsePing('rtt min/avg/max/mdev = 20.1/22.6/25.0/1.2 ms'), 23);
 });
+
+test('map pick: a player strong on the chosen map is rated higher there (with enough rounds)', () => {
+  const avg = row('9', 1.0), onNuke = row('9', 1.4, { rounds: 300 }), few = row('9', 1.4, { rounds: 30 });
+  const base = B.profile('P', '9', avg, avg, Roles).skill;
+  const withMap = B.profile('P', '9', avg, avg, Roles, onNuke, 'Nuke');
+  assert.ok(withMap.skill > base + 0.05, `${withMap.skill} vs ${base}`);
+  assert.match(withMap.why, /Nuke \d\.\d\d/);
+  assert.equal(B.profile('P', '9', avg, avg, Roles, few, 'Nuke').skill, base, 'under 60 rounds on the map: ignored');
+});

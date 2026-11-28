@@ -58,7 +58,7 @@ class Api {
   squad(names, map) { return this.req('POST', '/squad', { names, map }); }
   uploadPings(body) { return this.req('POST', '/pings', body); }
   pings() { return this.req('GET', '/pings'); }
-  stats(days = 0) { return this.req('GET', '/stats?days=' + Number(days || 0)); }
+  stats(days = 0, map = null) { return this.req('GET', '/stats?days=' + Number(days || 0) + (map ? '&map=' + encodeURIComponent(map) : '')); }
 }
 
 module.exports = { Api };

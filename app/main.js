@@ -568,6 +568,12 @@ setInterval(() => {
       }
     }
     lobbyState.gameRunning = running;
+    // CS2 just started (not already running when CheaterFlag opened): bring the window up on the Lobby tab
+    if (running && cs2WasRunning === false && store.get('openOnCs2') !== false) {
+      createWindow();
+      const go = () => setTimeout(() => send('goto', 'lobby'), 1500);   // after the page's own start-up tab choice
+      if (win.webContents.isLoading()) win.webContents.once('did-finish-load', go); else send('goto', 'lobby');
+    }
     if (running !== cs2WasRunning) { cs2WasRunning = running; send('lobby', lobbyState); }
   });
 }, 15000);
@@ -720,12 +726,13 @@ function registerIpc() {
     connectMatchHistory().catch((e) => send('log', e.message)); // same Steam session: usually no second sign-in
     return r.member;
   });
-  h('prefs', async () => ({ openAtLogin: store.get('openAtLogin') !== false, notifications: store.get('notifications') !== false,
+  h('prefs', async () => ({ openAtLogin: store.get('openAtLogin') !== false, openOnCs2: store.get('openOnCs2') !== false, notifications: store.get('notifications') !== false,
     keepCleanDays: store.get('keepCleanDays') == null ? 7 : Number(store.get('keepCleanDays')), tabStatus: store.get('tabStatus') === true }));
   h('demoUsage', async () => watcher ? retention.usage([watcher.cleanDir, watcher.flaggedDir]) : { bytes: 0, count: 0 });
   h('openDemos', async () => { if (watcher) { fs.mkdirSync(watcher.demoDir, { recursive: true }); shell.openPath(watcher.demoDir); } });
   h('setPrefs', async (p) => {
     const patch = {};
+    if (typeof p.openOnCs2 === 'boolean') patch.openOnCs2 = p.openOnCs2;
     if (typeof p.openAtLogin === 'boolean') { patch.openAtLogin = p.openAtLogin; if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: p.openAtLogin, args: ['--hidden'] }); }
     if (typeof p.notifications === 'boolean') patch.notifications = p.notifications;
     if ([0, 3, 7, 14].includes(Number(p.keepCleanDays))) patch.keepCleanDays = Number(p.keepCleanDays);
@@ -756,6 +763,7 @@ function registerIpc() {
   h('removeBlacklist', (id) => api.removeBlacklist(id));
   h('flags', (s) => api.flags(s));
   h('stats', (days) => api.stats(days));
+  h('mapStats', (map) => api.stats(0, map));
   h('balanceData', async () => {
     const names = (lobbyState && lobbyState.names) || [];
     const [all, form, pings, presence] = await Promise.all([api.stats(0), api.stats(14), api.pings().catch(() => ({ players: {}, names: {} })),

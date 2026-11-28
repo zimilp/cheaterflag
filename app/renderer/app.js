@@ -617,6 +617,7 @@ $('#ovForm').addEventListener('submit', (e) => {
 // ---------- settings + sign-in
 $('#btnSignOut').addEventListener('click', () => cf.signOut().then(init));
 $('#pLogin').addEventListener('change', (e) => cf.setPrefs({ openAtLogin: e.target.checked }));
+$('#pCs2').addEventListener('change', (e) => cf.setPrefs({ openOnCs2: e.target.checked }));
 $('#pNotify').addEventListener('change', (e) => cf.setPrefs({ notifications: e.target.checked }));
 $('#pTab').addEventListener('change', (e) => cf.setPrefs({ tabStatus: e.target.checked }).then(() => log(e.target.checked ? 'TAB player list on — restart CS2 once, then hold TAB in a match.' : 'TAB player list off — restart CS2 to restore your normal TAB.')).catch(fail));
 $('#pKeep').addEventListener('change', (e) => cf.setPrefs({ keepCleanDays: Number(e.target.value) }).then(refreshDemoUse));
@@ -722,7 +723,7 @@ async function init() {
   document.querySelectorAll('.admin-only').forEach((x) => x.classList.toggle('hidden', me?.role !== 'admin'));
   $('#who').textContent = me ? `${me.name || me.steamid} · ${me.role}` : 'Not signed in';
   const done = await refreshSetup().catch(() => false);
-  const pr = await cf.prefs(); $('#pLogin').checked = pr.openAtLogin; $('#pNotify').checked = pr.notifications;
+  const pr = await cf.prefs(); $('#pLogin').checked = pr.openAtLogin; $('#pCs2').checked = pr.openOnCs2 !== false; $('#pNotify').checked = pr.notifications;
   $('#pKeep').value = String(pr.keepCleanDays); refreshDemoUse();
   $('#pTab').checked = !!pr.tabStatus;
   $('#steamWho').textContent = me ? `Signed in as ${me.name || me.steamid}.` : 'Not signed in.';
@@ -754,7 +755,9 @@ function balPeople() {
   const form = new Map((bal.data.form || []).map((p) => [p.steamid, p]));
   const pings = (bal.data.pings && bal.data.pings.players) || {};
   const mine = bal.data.mine && bal.data.mine.pops;
-  const ppl = (bal.data.all || []).map((p) => ({ ...Balance.profile(p.name, p.steamid, p, form.get(p.steamid) || null, window.Roles),
+  const onMap = new Map(((bal.mapStats && bal.mapStats.players) || []).map((p) => [p.steamid, p]));
+  const mapName = bal.map && window.Lineups && Lineups.MAPS[bal.map] ? Lineups.MAPS[bal.map].name : bal.map;
+  const ppl = (bal.data.all || []).map((p) => ({ ...Balance.profile(p.name, p.steamid, p, form.get(p.steamid) || null, window.Roles, onMap.get(p.steamid) || null, mapName),
     ping: pings[p.steamid] || (p.steamid === me?.steamid ? mine : null) || null }));
   const have = new Set(ppl.map((p) => p.steamid));
   for (const x of bal.data.presence || []) if (!have.has(x.steamid) && x.how) ppl.push({ ...Balance.profile(x.name, x.steamid, null, null, window.Roles), guest: false, why: 'no stats yet — counted as average', ping: pings[x.steamid] || null });
@@ -809,7 +812,8 @@ function makeTeams() {
       el('div', { class: 'muted small' }, p.reason),
       balKey(p) === t.igl ? el('div', { class: 'small' }, 'Calls the shots: ' + t.iglWhy) : null)));
   out.replaceChildren(
-    el('p', { class: 'muted small' }, `${pop ? 'Server: ' + (names[pop] || pop) + '. ' : 'No ping data — split on skill only. '}Option ${r.which + 1} of the fairest splits (Shuffle for another).`),
+    el('p', { class: 'muted small' }, `${bal.map ? 'Map: ' + balMapName() + (bal.mapStats ? ' (map ratings counted where players have 60+ rounds on it)' : '') + '. ' : ''}${pop ? 'Server: ' + (names[pop] || pop) + '. ' : 'No ping data — split on skill only. '}Option ${r.which + 1} of the fairest splits (Shuffle for another).`,
+      bal.map ? el('button', { class: 'linkbtn', onclick: () => { smokePick = bal.map; showSub('smokes'); } }, ` ▶ ${balMapName()} smoke videos`) : null),
     el('div', { class: 'balgrid' }, col('Team A', r.A, r.winA), col('Team B', r.B, 100 - r.winA)));
   $('#balAgain').classList.remove('hidden'); $('#balCopy').classList.remove('hidden');
 }
@@ -828,7 +832,7 @@ $('#balCopy').onclick = () => {
   if (!bal.last) return;
   const { r, names } = bal.last;
   const t = (label, x) => `${label} (avg ${x.skill.toFixed(2)}${x.ping != null ? `, ${x.ping} ms` : ''}):\n` + x.players.map((p) => `  ${p.name}${balKey(p) === x.igl ? ' (IGL)' : ''} — ${p.reason}`).join('\n');
-  cf.copy(`${r.pop ? 'Server: ' + (names[r.pop] || r.pop) + '\n' : ''}${t('Team A', r.A)}\n${t('Team B', r.B)}`);
+  cf.copy(`${bal.map ? 'Map: ' + balMapName() + '\n' : ''}${r.pop ? 'Server: ' + (names[r.pop] || r.pop) + '\n' : ''}${t('Team A', r.A)}\n${t('Team B', r.B)}`);
   $('#balCopy').textContent = 'Copied ✓'; setTimeout(() => { $('#balCopy').textContent = 'Copy'; }, 1500);
 };
 
@@ -888,3 +892,17 @@ cf.on('lobby', (l) => {   // a new match switches the list to its map; leaving i
   const live = l && l.gameRunning !== false && l.map ? l.map : null;
   if (live !== smokeLive) { smokeLive = live; smokePick = null; if (lobbySub === 'smokes') renderSmokes(); }
 });
+
+// ---------- inhouse: map pick (also weighs each player's rating on that map)
+function balMapName() { return bal.map && window.Lineups && Lineups.MAPS[bal.map] ? Lineups.MAPS[bal.map].name : (bal.map || ''); }
+(function setupBalMap() {
+  const sel = $('#balMap'); if (!sel || !window.Lineups) return;
+  sel.append(el('option', { value: '' }, 'Any map'), ...Object.entries(Lineups.MAPS).filter(([, m]) => m.active).map(([k, m]) => el('option', { value: k }, m.name)));
+  const setMap = async (k) => {
+    bal.map = k || null; bal.mapStats = null; sel.value = k || '';
+    if (bal.map) { try { bal.mapStats = await cf.mapStats(bal.map); } catch (e) { log(e.message); } }
+    if (bal.data) { renderBalPlayers(); if (bal.last) makeTeams(); }
+  };
+  sel.onchange = () => setMap(sel.value);
+  $('#balRandMap').onclick = () => { const pool = Object.entries(Lineups.MAPS).filter(([k, m]) => m.active && k !== bal.map).map(([k]) => k); setMap(pool[Math.floor(Math.random() * pool.length)]); };
+})();

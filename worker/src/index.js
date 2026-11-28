@@ -302,15 +302,16 @@ function aggregateStats(results) {
 /** Squad stats for the last `days` (0 = all time), shared by everyone and rebuilt at most every 30 minutes:
  *  reading every match row for every request is what used up the database's free daily reads. */
 const STATS_TTL = 30 * 60;
-async function cachedStats(env, days) {
-  const k = 'stats:' + (Number(days) || 0);
+async function cachedStats(env, days, map = null) {
+  map = map && /^[a-z0-9]{2,20}$/.test(map) ? map : null;   // one map only (team balancer), e.g. 'nuke'
+  const k = 'stats:' + (Number(days) || 0) + (map ? ':' + map : '');
   try {
     const c = await env.DB.prepare('SELECT v, at FROM cache WHERE k = ?').bind(k).first();
     if (c && now() - c.at < STATS_TTL) return JSON.parse(c.v);
   } catch (_) {}
   const since = days > 0 ? Date.now() - days * 86400000 : 0;
   const { results } = await env.DB.prepare(`SELECT s.steamid, s.stats, m.name FROM match_stats s JOIN members m ON m.steamid = s.steamid
-    WHERE m.status = 'approved' AND COALESCE(s.played_at, 0) >= ?`).bind(since).all();
+    WHERE m.status = 'approved' AND COALESCE(s.played_at, 0) >= ?${map ? ' AND s.map IN (?, ?)' : ''}`).bind(since, ...(map ? ['de_' + map, map] : [])).all();
   const players = aggregateStats(results);
   try { await env.DB.prepare('INSERT OR REPLACE INTO cache (k, v, at) VALUES (?,?,?)').bind(k, JSON.stringify(players), now()).run(); } catch (_) {}
   return players;
@@ -667,7 +668,7 @@ async function route(req, env) {
   }
   if (p === '/stats' && req.method === 'GET') {
     const days = Number(url.searchParams.get('days')) || 0;
-    return json({ players: await cachedStats(env, [0, 7, 14, 30, 90].includes(days) ? days : 0) });
+    return json({ players: await cachedStats(env, [0, 7, 14, 30, 90].includes(days) ? days : 0, (url.searchParams.get('map') || '').toLowerCase().replace(/^(de|cs)_/, '') || null) });
   }
 
   const dm = p.match(/^\/demos\/(\d+)$/);

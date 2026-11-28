@@ -255,3 +255,5 @@ table.stats tbody tr:hover td { background:#1a1f2a; }
 @media (max-width: 1050px) { .smokelayout { grid-template-columns:1fr; } .smokeplayer { position:static; } .smokelist { max-height:none; } }
 #balBody > .row { margin-top:12px; }
 #balBody > .balplayers { margin-bottom:4px; }
+.linkbtn { background:none; border:none; color:var(--accent); cursor:pointer; padding:0 4px; font-size:inherit; }
+#balMap { min-width:0; }

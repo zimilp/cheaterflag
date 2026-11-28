@@ -22,12 +22,14 @@
   const pick = (p) => (p && (p.fullMatches >= 3 ? p.full : p.all)) || null;
 
   /** Skill (overall + current form), IGL score and role for one player. `all`/`form` are /stats rows (or null). */
-  function profile(name, steamid, all, form, Roles) {
-    const ov = ratingOf(pick(all)), fm = ratingOf(pick(form));
+  function profile(name, steamid, all, form, Roles, onMap = null, mapName = null) {
+    const ov = ratingOf(pick(all)), fm = ratingOf(pick(form)), mp = ratingOf(pick(onMap));
     let skill = AVG, why;
     if (ov && fm && fm.rounds >= 60) { skill = 0.5 * ov.value + 0.5 * fm.value; why = `form ${fm.value.toFixed(2)} (14 days), overall ${ov.value.toFixed(2)}`; }
     else if (ov) { skill = ov.value; why = `overall ${ov.value.toFixed(2)}${fm ? ', few games lately' : ', no games in 14 days'}`; }
     else why = 'no stats yet — counted as average';
+    // the chosen map: enough games on it (60+ rounds) and their rating there counts for a third
+    if (mp && mp.rounds >= 60) { skill = (ov ? 2 / 3 : 0) * skill + (ov ? 1 / 3 : 1) * mp.value; why += ` · ${mapName || 'this map'} ${mp.value.toFixed(2)}`; }
     const d = (all && all.full) || {};
     const rounds = z(d, 'rounds');
     const nat = Roles && rounds >= (Roles.MIN_ROUNDS || 20) ? Roles.naturalRoles(d) : null;
