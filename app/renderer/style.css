@@ -211,3 +211,21 @@ table.stats tbody tr:hover td { background:#1a1f2a; }
 .baloff summary { cursor:pointer; margin:4px 0; }
 .baloff .balp { opacity:.75; }
 .balplayers { display:block !important; }
+.smokevids { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:12px; margin-top:8px; }
+.smokevid { cursor:pointer; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:#12151c; }
+.smokevid:hover { border-color:var(--accent); }
+.smokevid img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; }
+.smokevid .svtitle { padding:8px 10px 2px; font-weight:600; }
+.smokevid .muted { padding:0 10px 10px; }
+#smokeMap { min-width:0; padding:5px 8px; }
+.smokevid .thumb { position:relative; cursor:pointer; }
+.smokevid .playbtn { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:44px; height:44px; border-radius:50%; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; font-size:18px; }
+.smokevid .svtitle { cursor:pointer; }
+.smokevid.playing { grid-column:1 / -1; cursor:default; }
+.smokevid.playing iframe { width:100%; aspect-ratio:16/9; border:0; display:block; }
+.smokevid .svbar { padding:6px 10px; }
+.smokemap { margin-top:12px; } .smokemap h4 { margin:0; }
+#smokeVids .smokevids { margin-top:6px; }
+#smokeVids { display:block; }
+#smokeCard .rp-sp { flex:1; }
+.smokevid.playing { max-width:960px; }

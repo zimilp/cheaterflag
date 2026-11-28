@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://avatars.steamstatic.com https://avatars.akamai.steamstatic.com data:; style-src 'self'; script-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://avatars.steamstatic.com https://avatars.akamai.steamstatic.com https://i.ytimg.com data:; style-src 'self'; script-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com" />
   <title>CheaterFlag</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -84,6 +84,12 @@
       <div id="squadCard" class="card hidden">
         <div class="row between"><h3 id="squadTitle">Squad plan</h3><span class="muted" id="squadNote"></span></div>
         <div class="squadgrid"><div id="squadTable"></div><div id="squadMap"></div></div>
+      </div>
+      <div class="card" id="smokeCard">
+        <div class="row between"><h3 id="smokeTitle">Smoke lineups</h3>
+          <span class="row"><label class="inline small muted">Map <select id="smokeMap"></select></label><button id="smokeNewest" title="Latest uploads for this map on YouTube">Newest on YouTube</button></span></div>
+        <p class="muted small">Short, recent videos of the easiest standard smokes — click one to play it here. In a match you see that map; otherwise every map. CS2 also has Valve's own lineups built in — open the map's grenade guide in-game.</p>
+        <div id="smokeVids" class="smokevids"></div>
       </div>
       <table><thead><tr><th>Player</th><th>Status</th><th>Why</th><th></th></tr></thead><tbody id="lobbyRows"></tbody></table>
     </section>
@@ -173,6 +179,7 @@
   <script src="roles.js"></script>
   <script src="replay.js"></script>
   <script src="balance.js"></script>
+  <script src="lineups.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -820,12 +820,35 @@ function registerIpc() {
     return watcher.scanFile(r.filePaths[0]);
   });
   h('openProfile', (id) => shell.openExternal('https://steamcommunity.com/profiles/' + id));
-  h('openExternal', (u) => { if (/^https:\/\/(help\.steampowered\.com|steamcommunity\.com)\//.test(u)) shell.openExternal(u); });
+  h('openExternal', (u) => { if (/^https:\/\/(help\.steampowered\.com|steamcommunity\.com|www\.youtube\.com)\//.test(u)) shell.openExternal(u); });
+  // smoke lineup videos: a small player window inside the app (YouTube only, nothing else can load in it)
+  let videoWin = null;
+  h('playVideo', ({ id, title } = {}) => {
+    if (!/^[A-Za-z0-9_-]{11}$/.test(String(id || ''))) return false;
+    const url = `https://www.youtube.com/watch?v=${id}`;
+    if (!videoWin || videoWin.isDestroyed()) {
+      videoWin = new BrowserWindow({ width: 1000, height: 620, title: title || 'Smoke lineups', autoHideMenuBar: true, backgroundColor: '#0f1115',
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+      const onlyYouTube = (e, u) => { if (!/^https:\/\/([a-z0-9-]+\.)*(youtube\.com|google\.com|gstatic\.com|ytimg\.com)\//.test(u)) e.preventDefault(); };
+      videoWin.webContents.on('will-navigate', onlyYouTube);
+      videoWin.webContents.setWindowOpenHandler(({ url: u }) => { if (/^https:\/\/www\.youtube\.com\//.test(u)) shell.openExternal(u); return { action: 'deny' }; });
+    }
+    videoWin.setTitle(title || 'Smoke lineups');
+    videoWin.loadURL(url); videoWin.show(); videoWin.focus();
+    return true;
+  });
   h('copy', (t) => clipboard.writeText(String(t)));
   h('scanLobby', () => lobby.scanNow());
 }
 
 app.whenReady().then(() => {
+  // in-app YouTube player (smoke lineups): YouTube won't play embeds without a Referer, which a desktop app page
+  // doesn't send — add one, only for YouTube's embed player
+  try {
+    require('electron').session.defaultSession.webRequest.onBeforeSendHeaders(
+      { urls: ['https://www.youtube-nocookie.com/*', 'https://www.youtube.com/embed/*'] },
+      (d, cb) => { d.requestHeaders.Referer = 'https://cheaterflag.app/'; cb({ requestHeaders: d.requestHeaders }); });
+  } catch (_) {}
   app.setAppUserModelId('com.ehbaah.cheaterflag');
   store = new Store(app.getPath('userData'), defaults);
   if (!store.get('workerUrl') && defaults.workerUrl) store.set({ workerUrl: defaults.workerUrl });
