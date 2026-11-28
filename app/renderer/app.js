@@ -24,6 +24,7 @@ let me = null, state = null;
 let watchActive = false;
 function showWatchBar(on) { if (on !== undefined) watchActive = on; const t = document.querySelector('#tabs button.active')?.dataset.tab; $('#watchBar').classList.toggle('hidden', !(watchActive && (t === 'matches' || t === 'review'))); }
 function showTab(name) {
+  if (name !== 'lobby' && typeof stopSmoke === 'function') stopSmoke();   // leaving the Lobby stops a playing video
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab').forEach((s) => s.classList.toggle('hidden', s.id !== 'tab-' + name));
   setTimeout(() => showWatchBar(), 0);
@@ -812,7 +813,7 @@ function makeTeams() {
     el('div', { class: 'balgrid' }, col('Team A', r.A, r.winA), col('Team B', r.B, 100 - r.winA)));
   $('#balAgain').classList.remove('hidden'); $('#balCopy').classList.remove('hidden');
 }
-$('#balOpen').onclick = async () => { $('#balBody').classList.toggle('hidden'); if (!bal.data) await loadBalance(); };
+
 $('#balAuto').onclick = async () => { await loadBalance(); };
 $('#balAddGuest').onclick = () => { const n = $('#balGuest').value.trim(); if (!n || !bal.data) return; bal.guests.push(n); bal.picked.add('g:' + n); $('#balGuest').value = ''; renderBalPlayers(); };
 $('#balGo').onclick = () => { bal.which = 0; makeTeams(); };
@@ -831,48 +832,59 @@ $('#balCopy').onclick = () => {
   $('#balCopy').textContent = 'Copied ✓'; setTimeout(() => { $('#balCopy').textContent = 'Copy'; }, 1500);
 };
 
-// ---------- smoke lineup videos: the map being played, or every map while you're not in a match
-let smokePick = null;   // map chosen by hand ('all' or a map key); null = follow the match
-function smokeCard(m, v) {
-  const card = el('div', { class: 'smokevid', title: v.note });
-  const play = () => {
-    card.classList.add('playing');
-    card.replaceChildren(
-      el('iframe', { src: `https://www.youtube-nocookie.com/embed/${v.id}?autoplay=1&rel=0&modestbranding=1`, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: 'true', referrerpolicy: 'strict-origin-when-cross-origin' }),
-      el('div', { class: 'row svbar' },
-        el('span', { class: 'svtitle' }, `${m.name} — ${v.title}`), el('span', { class: 'rp-sp' }),
-        el('button', { title: 'Play in a separate window', onclick: () => cf.playVideo({ id: v.id, title: `${m.name} — ${v.title}` }) }, 'Pop out'),
-        el('button', { title: 'Close the video', onclick: () => { card.replaceWith(smokeCard(m, v)); } }, '✕')));
-  };
-  card.append(el('div', { class: 'thumb', onclick: play }, el('img', { src: Lineups.thumb(v.id), alt: '' }), el('span', { class: 'playbtn' }, '▶')),
-    el('div', { class: 'svtitle', onclick: play }, v.title),
-    el('div', { class: 'muted small' }, `${v.when} · ${v.note}`));
-  return card;
+// ---------- Lobby sub-tabs: Current match · Inhouse 5v5 · Smoke lineups
+let lobbySub = (() => { try { return localStorage.getItem('lobbySub') || 'match'; } catch (_) { return 'match'; } })();
+function showSub(name) {
+  lobbySub = name; try { localStorage.setItem('lobbySub', name); } catch (_) {}
+  document.querySelectorAll('#lobbySubtabs button').forEach((b) => b.classList.toggle('active', b.dataset.sub === name));
+  document.querySelectorAll('#tab-lobby .sub').forEach((x) => x.classList.toggle('hidden', x.id !== 'sub-' + name));
+  if (name === 'inhouse' && !bal.data) loadBalance();
+  if (name === 'smokes') renderSmokes();
+  if (name !== 'smokes') stopSmoke();   // leaving the videos stops the one playing
 }
+document.querySelectorAll('#lobbySubtabs button').forEach((b) => b.addEventListener('click', () => showSub(b.dataset.sub)));
+setTimeout(() => showSub(lobbySub), 0);
+
+// ---------- smoke lineup videos: one player, list beside it; the map being played, or every map out of a match
+let smokePick = null, smokePlaying = null;   // smokePick: 'all' or a map key chosen by hand (null = follow the match)
+const smokeLiveMap = () => { const l = state && state.lobby; return l && l.gameRunning !== false && l.map ? Lineups.key(l.map) : null; };
+function stopSmoke() { const f = $('#smokeFrame'); if (f && f.querySelector('iframe')) { smokePlaying = null; renderSmokeFrame(); } }
+function renderSmokeFrame(poster) {
+  const f = $('#smokeFrame'); f.replaceChildren();
+  if (smokePlaying) {
+    const { m, v } = smokePlaying;
+    f.append(el('iframe', { src: `https://www.youtube-nocookie.com/embed/${v.id}?autoplay=1&rel=0&modestbranding=1`, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: 'true', referrerpolicy: 'strict-origin-when-cross-origin' }));
+    $('#smokeNowTitle').textContent = `${m.name} — ${v.title}`;
+  } else if (poster) {
+    f.append(el('div', { class: 'smokeposter', onclick: () => playSmoke(poster.m, poster.v) }, el('img', { src: Lineups.thumb(poster.v.id), alt: '' }), el('span', { class: 'playbtn big' }, '▶')));
+    $('#smokeNowTitle').textContent = `${poster.m.name} — ${poster.v.title}`;
+  } else { f.append(el('div', { class: 'smokeposter empty muted' }, 'Pick a video')); $('#smokeNowTitle').textContent = ''; }
+  const cur = smokePlaying || poster;
+  $('#smokePop').disabled = !cur;
+  $('#smokePop').onclick = () => { if (!cur) return; const id = cur.v.id; smokePlaying = null; renderSmokeFrame(cur); cf.playVideo({ id, title: `${cur.m.name} — ${cur.v.title}` }); };
+  document.querySelectorAll('#smokeList .smokeitem').forEach((x) => x.classList.toggle('on', !!cur && x.dataset.id === cur.v.id));
+}
+function playSmoke(m, v) { smokePlaying = { m, v }; renderSmokeFrame(); }   // replaces whatever was playing (one player only)
 function renderSmokes() {
-  const sel = $('#smokeMap'); if (!sel || !window.Lineups) return;
-  const l = state && state.lobby;
-  const live = l && l.gameRunning !== false && l.map ? Lineups.key(l.map) : null;   // only while a match is loaded
-  const cur = smokePick || live || 'all';
-  if (!sel.options.length) {
-    sel.append(el('option', { value: 'all' }, 'All maps'), ...Object.entries(Lineups.MAPS).map(([k, m]) => el('option', { value: k }, m.name + (m.active ? '' : ' (reserve)'))));
-    sel.onchange = () => { smokePick = sel.value; renderSmokes(); };
-  }
-  sel.value = Lineups.MAPS[cur] ? cur : 'all';
-  const box = $('#smokeVids'); box.replaceChildren();
+  if (!window.Lineups || !$('#smokeChips')) return;
+  const live = smokeLiveMap(), cur = smokePick || live || 'all';
+  const chips = $('#smokeChips'); chips.replaceChildren();
+  const chip = (k, label) => el('button', { class: 'chip' + (k === cur ? ' on' : ''), onclick: () => { smokePick = k; renderSmokes(); } }, label);
+  chips.append(chip('all', 'All maps'), ...Object.entries(Lineups.MAPS).map(([k, m]) => chip(k, m.name + (k === live ? ' ●' : '') + (m.active ? '' : ' (reserve)'))));
   const maps = cur === 'all' || !Lineups.MAPS[cur] ? Object.entries(Lineups.MAPS) : [[cur, Lineups.MAPS[cur]]];
-  $('#smokeTitle').textContent = maps.length > 1 ? 'Smoke lineups · all maps' : `Smoke lineups · ${maps[0][1].name}${live === cur ? ' (this match)' : ''}`;
-  $('#smokeNewest').classList.toggle('hidden', maps.length > 1);
-  if (maps.length === 1) $('#smokeNewest').onclick = () => cf.openExternal(Lineups.newestUrl(cur));
+  const list = $('#smokeList'); list.replaceChildren();
   for (const [k, m] of maps) {
-    if (maps.length > 1) box.append(el('div', { class: 'smokemap row' }, el('h4', {}, m.name + (m.active ? '' : ' · reserve')), el('span', { class: 'rp-sp' }),
-      el('a', { href: '#', class: 'small', onclick: (e) => { e.preventDefault(); cf.openExternal(Lineups.newestUrl(k)); } }, 'Newest on YouTube')));
-    box.append(el('div', { class: 'smokevids' }, m.videos.map((v) => smokeCard(m, v))));
+    if (maps.length > 1) list.append(el('div', { class: 'smokegroup muted small' }, m.name + (k === live ? ' · this match' : '')));
+    for (const v of m.videos) list.append(el('div', { class: 'smokeitem', 'data-id': v.id, title: v.note, onclick: () => playSmoke(m, v) },
+      el('img', { src: Lineups.thumb(v.id), alt: '' }),
+      el('div', {}, el('div', { class: 'sititle' }, v.title), el('div', { class: 'muted small' }, `${v.when} · ${v.note}`))));
   }
+  $('#smokeNewest').onclick = () => cf.openExternal(Lineups.newestUrl(maps.length === 1 ? cur : (live || 'mirage')));
+  const first = maps[0] && maps[0][1].videos[0] ? { m: maps[0][1], v: maps[0][1].videos[0] } : null;
+  if (!smokePlaying) renderSmokeFrame(first); else renderSmokeFrame();
 }
 let smokeLive = null;
-cf.on('lobby', (l) => {   // a new match switches to its map; leaving it goes back to all maps (unless you picked one)
+cf.on('lobby', (l) => {   // a new match switches the list to its map; leaving it goes back to all maps
   const live = l && l.gameRunning !== false && l.map ? l.map : null;
-  if (live !== smokeLive) { smokeLive = live; smokePick = null; if (!document.querySelector('#smokeVids iframe')) renderSmokes(); }
+  if (live !== smokeLive) { smokeLive = live; smokePick = null; if (lobbySub === 'smokes') renderSmokes(); }
 });
-setTimeout(renderSmokes, 500);

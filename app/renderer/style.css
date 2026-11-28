@@ -229,3 +229,27 @@ table.stats tbody tr:hover td { background:#1a1f2a; }
 #smokeVids { display:block; }
 #smokeCard .rp-sp { flex:1; }
 .smokevid.playing { max-width:960px; }
+.subtabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:0 0 14px; }
+.subtabs button { background:none; border:none; border-bottom:2px solid transparent; border-radius:0; color:var(--muted); padding:8px 14px; cursor:pointer; font-size:14px; }
+.subtabs button.active { color:var(--text); border-bottom-color:var(--accent); }
+.smokechips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+.smokechips .chip { border-radius:16px; padding:4px 12px; font-size:13px; }
+.smokechips .chip.on { border-color:var(--accent); background:#2a1d1a; color:var(--text); }
+.smokelayout { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:16px; align-items:start; }
+.smokeplayer { position:sticky; top:70px; }
+.smokeframe { width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; border:1px solid var(--line); }
+.smokeframe iframe { width:100%; height:100%; border:0; display:block; }
+.smokeposter { position:relative; width:100%; height:100%; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.smokeposter img { width:100%; height:100%; object-fit:cover; opacity:.8; }
+.smokeposter.empty { cursor:default; }
+.playbtn.big { position:absolute; width:72px; height:72px; border-radius:50%; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; font-size:28px; }
+.smokenow { margin:8px 0 2px; }
+.smokenow .rp-sp { flex:1; }
+.smokelist { max-height:calc(100vh - 200px); overflow:auto; display:flex; flex-direction:column; gap:6px; padding-right:4px; }
+.smokegroup { margin:8px 0 2px; text-transform:uppercase; letter-spacing:.04em; }
+.smokeitem { display:grid; grid-template-columns:128px 1fr; gap:10px; padding:6px; border:1px solid var(--line); border-radius:8px; cursor:pointer; background:#12151c; }
+.smokeitem:hover { border-color:#3a4252; }
+.smokeitem.on { border-color:var(--accent); background:#20181a; }
+.smokeitem img { width:128px; aspect-ratio:16/9; object-fit:cover; border-radius:4px; display:block; background:#000; }
+.smokeitem .sititle { font-weight:600; font-size:13px; margin-bottom:2px; }
+@media (max-width: 1050px) { .smokelayout { grid-template-columns:1fr; } .smokeplayer { position:static; } .smokelist { max-height:none; } }
